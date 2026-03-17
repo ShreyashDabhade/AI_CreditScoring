@@ -1,0 +1,1 @@
+# MasterMind configs package

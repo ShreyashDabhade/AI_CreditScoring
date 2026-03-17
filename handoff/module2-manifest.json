@@ -1,0 +1,43 @@
+{
+  "module": "Feature Engineering",
+  "exports": [
+    "FrozenFeatureBuilder",
+    "fit_full_builder(train_df: pd.DataFrame, raw_dir: str = 'data/raw/') -> FrozenFeatureBuilder",
+    "fit_reduced_builder(train_df: pd.DataFrame) -> FrozenFeatureBuilder",
+    "build_full(df: pd.DataFrame, builder: FrozenFeatureBuilder, for_linear_model: bool = false, raw_dir: str | None = null) -> pd.DataFrame",
+    "build_reduced(df: pd.DataFrame, builder: FrozenFeatureBuilder, for_linear_model: bool = false) -> pd.DataFrame",
+    "pool_rare_categories(series: pd.Series, min_count: int = 500) -> pd.Series",
+    "safe_div(a: pd.Series | np.ndarray, b: pd.Series | np.ndarray) -> np.ndarray",
+    "assert_unique_key(df: pd.DataFrame, key: str, name: str) -> None",
+    "safe_left_merge_one_to_one(base_df: pd.DataFrame, feat_df: pd.DataFrame, key: str = 'SK_ID_CURR', feat_name: str = 'features') -> pd.DataFrame",
+    "prefix_columns(df: pd.DataFrame, prefix: str, key: str = 'SK_ID_CURR') -> pd.DataFrame"
+  ],
+  "artifacts": [
+    "artifacts/full_feature_builder.joblib",
+    "artifacts/reduced_feature_builder.joblib"
+  ],
+  "schema": {
+    "CATEGORICAL_MODEL_COLS": "list[str] - 7 categorical application columns, one-hot encoded during transform",
+    "NUMERIC_RAW_COLS": "list[str] - 25 numeric application inputs expected from Module 1",
+    "FAIRNESS_ONLY_COLS": "list[str] - dropped before fit and transform output",
+    "FORBIDDEN_COLS": "list[str] - never emitted in model outputs",
+    "FrozenFeatureBuilder": "dataclass containing frozen rare maps, missing-flag policy, imputers, frozen output columns, numeric scale columns, scaler, and FULL aggregate metadata",
+    "build_full_output": "pd.DataFrame aligned exactly to full_builder.encoded_columns_",
+    "build_reduced_output": "pd.DataFrame aligned exactly to reduced_builder.encoded_columns_"
+  },
+  "envVars": {
+    "DATA_PROCESSED_DIR": "Optional processed split root used by inline Stage 4 validation; defaults to data/processed/",
+    "DATA_RAW_DIR": "Operational path concept for raw CSV access; fit_full_builder and offline FULL transforms use the raw_dir argument directly"
+  },
+  "dependencies": {
+    "pandas": "2.1.x",
+    "numpy": "1.26.x",
+    "scikit-learn": "1.4.x",
+    "joblib": "runtime dependency for persisted builder artifacts"
+  },
+  "outputs": [
+    "src/feature_engineering.py",
+    "artifacts/full_feature_builder.joblib",
+    "artifacts/reduced_feature_builder.joblib"
+  ]
+}
