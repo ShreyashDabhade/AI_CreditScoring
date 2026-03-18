@@ -1,0 +1,60 @@
+{
+  "module": "Explainability & Fairness",
+  "exports": [
+    "render_reason(feature_name: str) -> str",
+    "top_5_explanations_from_shap(shap_series: pd.Series) -> list[dict[str,str]]",
+    "generate_shap_plots(explainer, X_test, feature_names, calibrated_pds, output_dir) -> None",
+    "plot_confusion_matrix(y_true, calibrated_pds, threshold=0.35, output_dir) -> None",
+    "plot_roc_curve(y_true, calibrated_pds, output_dir) -> float",
+    "compute_fbeta(y_true, y_pred_binary, beta=5.0) -> float",
+    "plot_fbeta_sweep(y_true, calibrated_pds, beta=5.0, output_dir) -> float",
+    "derive_fairness_groups(df, train_income_q1, train_income_q2) -> pd.DataFrame",
+    "valid_fairness_cells(df, group_col, y_col, min_n, min_pos) -> list[str]",
+    "compute_fairness_metrics(df, group_col, y_col, pd_col, decision_col, min_n, min_pos) -> pd.DataFrame",
+    "run_full_fairness_audit(df, train_income_q1, train_income_q2, output_dir) -> bool"
+  ],
+  "routes": [],
+  "schema": {
+    "REASON_MAP": "dict[str,str] — 6 prefix keys",
+    "fairness_audit_csv_columns": "group_value, n, n_defaults, approve_rate, tpr, brier_score, di_ratio, eod, brier_ratio, evaluable, di_pass, eod_pass, brier_pass",
+    "top_5_explanations_return": "list of exactly 5 dicts with keys: feature (str), reason (str)",
+    "compute_fairness_metrics_return": "pd.DataFrame — one row per group value, 13 columns",
+    "model_fairness_audit_passed": "Python bool — True only if all 9 metric-family combinations pass",
+    "CALIBRATED_PD_col": "float column in audit df — calibrated probability of default in [0,1]",
+    "DECISION_col": "str column in audit df — one of APPROVE, REVIEW, DECLINE"
+  },
+  "envVars": {
+    "ARTIFACT_DIR": "str — default artifacts/",
+    "SHAP_PLOTS_DIR": "str — default notebooks/shap_plots/",
+    "FAIRNESS_PLOTS_DIR": "str — default notebooks/fairness_plots/",
+    "EVAL_PLOTS_DIR": "str — default notebooks/eval_plots/"
+  },
+  "dependencies": {
+    "pandas": "2.1.x",
+    "numpy": "1.26.x",
+    "matplotlib": "3.8.x",
+    "seaborn": "0.13.x",
+    "shap": "0.44.x",
+    "scikit-learn": "1.4.x",
+    "xgboost": "2.0.x",
+    "joblib": "1.3.x"
+  },
+  "outputs": [
+    "src/explainability.py",
+    "src/fairness_audit.py",
+    "notebooks/shap_plots/global_summary_bar.png",
+    "notebooks/shap_plots/beeswarm.png",
+    "notebooks/shap_plots/heatmap.png",
+    "notebooks/shap_plots/local_approve.png",
+    "notebooks/shap_plots/local_review.png",
+    "notebooks/shap_plots/local_decline.png",
+    "notebooks/fairness_plots/audit_primary.csv",
+    "notebooks/fairness_plots/audit_secondary.csv",
+    "notebooks/fairness_plots/audit_tertiary.csv",
+    "notebooks/fairness_plots/fairness_summary_card.png",
+    "notebooks/eval_plots/confusion_matrix.png",
+    "notebooks/eval_plots/roc_curve.png",
+    "notebooks/eval_plots/fbeta_sweep.png",
+    "artifacts/model_fairness_audit_passed.joblib"
+  ]
+}
