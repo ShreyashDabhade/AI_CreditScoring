@@ -95,7 +95,7 @@ def enforce_schema(df: pd.DataFrame, schema: dict[str, str]) -> pd.DataFrame:
     df_copy = df.copy()
     for col, dtype in schema.items():
         if col in df_copy.columns:
-            df_copy[col] = df_copy[col].astype(dtype)
+            df_copy[col] = df_copy[col].astype(np.dtype(dtype))
     return df_copy
 
 
