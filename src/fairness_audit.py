@@ -39,6 +39,28 @@ FAIRNESS_COLS: list[str] = [
 ]
 
 
+def _load_or_fit_full_builder(
+    train_raw: pd.DataFrame,
+    raw_dir: str = "data/raw/",
+    builder_path: str = "artifacts/full_feature_builder.joblib",
+):
+    """Boundary shim for the Module 2 FrozenFeatureBuilder contract."""
+    from src.feature_engineering import FrozenFeatureBuilder, fit_full_builder
+
+    if os.path.exists(builder_path):
+        builder = joblib.load(builder_path)
+        if not isinstance(builder, FrozenFeatureBuilder):
+            raise TypeError(
+                "full_feature_builder.joblib must contain a FrozenFeatureBuilder"
+            )
+        return builder
+
+    builder = fit_full_builder(train_raw, raw_dir=raw_dir)
+    if builder_path != "artifacts/full_feature_builder.joblib":
+        builder.save(builder_path)
+    return builder
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Stage 4 — Fairness Group Derivation
 # ──────────────────────────────────────────────────────────────────────
@@ -375,27 +397,20 @@ def main() -> None:
         with open(os.path.join(DATA_PROCESSED_DIR, "test.pkl"), "rb") as f:
             test_raw = pickle.load(f)
 
-        from src.data_pipeline import fit_missing_policy
-        from src.feature_engineering import (
-            FrozenFeatureBuilder,
-            build_full,
-            fit_full_builder,
-        )
+        from src.feature_engineering import build_full
         from src.models.train import decision_from_pd, load_artifacts
 
-        missingness_policy = fit_missing_policy(train_raw)
         artifacts = load_artifacts(ARTIFACT_DIR)
 
         model = artifacts["full_model"]
         calibrator = artifacts["full_calibrator"]
         explainer = artifacts["full_shap_explainer"]
 
-        # Load or fit the feature builder
-        builder_path = "artifacts/full_feature_builder.joblib"
-        if os.path.exists(builder_path):
-            full_builder = joblib.load(builder_path)
-        else:
-            full_builder = fit_full_builder(train_raw, raw_dir="data/raw/")
+        full_builder = _load_or_fit_full_builder(
+            train_raw,
+            raw_dir="data/raw/",
+            builder_path="artifacts/full_feature_builder.joblib",
+        )
 
         X_test_full = build_full(test_raw, full_builder, raw_dir="data/raw/")
         feature_names = list(X_test_full.columns)

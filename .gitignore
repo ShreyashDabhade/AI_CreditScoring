@@ -22,7 +22,8 @@ ENV/
 !.env.example
 
 # Data
-data/raw/
+data/raw/*
+!data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
 
@@ -34,7 +35,6 @@ artifacts/*
 *.pickle
 
 # Notebook outputs
-notebooks/eda_plots/*
 !notebooks/eda_plots/.gitkeep
 notebooks/shap_plots/*
 !notebooks/shap_plots/.gitkeep
