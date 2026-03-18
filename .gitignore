@@ -34,7 +34,6 @@ artifacts/*
 *.pickle
 
 # Notebook outputs
-notebooks/eda_plots/*
 !notebooks/eda_plots/.gitkeep
 notebooks/shap_plots/*
 !notebooks/shap_plots/.gitkeep
