@@ -1,4 +1,4 @@
-"""Module 1 — Data Pipeline stub.
+"""Module 1 — Data Pipeline.
 
 This module handles:
 - Data loading
