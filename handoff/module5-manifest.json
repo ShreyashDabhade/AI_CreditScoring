@@ -1,0 +1,42 @@
+{
+  "module": "Flask API",
+  "exports": [
+    "create_app(artifact_dir: str | None = None, processed_dir: str | None = None, mock_mode: bool = false, strict_artifacts: bool = true) -> Flask",
+    "validate_payload(payload: dict) -> tuple[str | None, list[str]]",
+    "determine_coverage_tier(payload: dict) -> str",
+    "build_input_df(payload: dict, tier: str) -> pd.DataFrame",
+    "score_request(payload: dict, runtime: dict, mock_mode: bool = false) -> dict"
+  ],
+  "routes": [
+    "GET /health",
+    "POST /score"
+  ],
+  "dependencies": {
+    "processed_manifest": "data/processed/processed_artifact_manifest.json is required in strict real mode",
+    "builders": "FULL and REDUCED builders must be loaded only via src/builder_artifacts.py",
+    "models": "artifacts/full_model.joblib and artifacts/reduced_model.joblib",
+    "calibrators": "artifacts/full_calibrator.joblib and artifacts/reduced_calibrator.joblib",
+    "explainers": "artifacts/full_shap_explainer.joblib and artifacts/reduced_shap_explainer.joblib",
+    "fairness_result": "artifacts/model_fairness_audit_passed.joblib",
+    "metadata": "artifacts/reproducibility_report.json is optional but preferred for /health version metadata"
+  },
+  "behavior": {
+    "startup_mode": "real mode is eager and fail-fast; runtime is loaded once and stored immutably on the Flask app",
+    "builder_policy": "Module 5 must not rebuild or refit builders in normal mode",
+    "request_time_data_policy": "live scoring must not read raw child CSVs or processed split pickle files",
+    "diagnostic_only": "data/processed/app_test_adv.pkl is diagnostic-only and not used for live scoring"
+  },
+  "outputs": [
+    "src/api/app.py",
+    "src/api/__init__.py",
+    "tests/test_api.py",
+    "README.md",
+    "handoff/module5-manifest.json",
+    "handoff/INTEGRATION-NOTES-module5.md"
+  ],
+  "status": {
+    "module5_stub_replaced": true,
+    "tests_stub_replaced": true,
+    "terminal_consumer": "Module 5 is the terminal consumer of the persisted lineage-validated artifact stack"
+  }
+}

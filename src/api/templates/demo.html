@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MasterMind Demo Console</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='demo.css') }}">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow">Module 5 Demo Frontend</p>
+                <h1>MasterMind Demo Console</h1>
+                <p class="hero-copy">
+                    This frontend is built from scratch and drives the real backend pipeline:
+                    validate, flatten, transform with the loaded builder, score, calibrate,
+                    decide, and explain.
+                </p>
+            </div>
+            <div class="hero-badges">
+                <span class="badge">{{ demo_config.runtimeMode|upper }} MODE</span>
+                <span class="badge subtle">Fairness {{ "PASS" if demo_config.fairnessAuditPassed else "PENDING" }}</span>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <section class="panel controls-panel">
+                <div class="panel-header">
+                    <h2>Pipeline Controls</h2>
+                    <p>Choose a coverage tier, edit inputs, and score through the backend.</p>
+                </div>
+
+                <div class="tier-toggle" role="radiogroup" aria-label="Coverage tier">
+                    <button type="button" class="tier-button" data-tier="REDUCED">Reduced</button>
+                    <button type="button" class="tier-button" data-tier="FULL">Full</button>
+                </div>
+
+                <div class="action-row">
+                    <button type="button" id="load-reduced" class="secondary-button">Load Reduced Sample</button>
+                    <button type="button" id="load-full" class="secondary-button">Load Full Sample</button>
+                    <button type="button" id="clear-form" class="ghost-button">Clear</button>
+                    <button type="button" id="score-button" class="primary-button">Run Scoring Pipeline</button>
+                </div>
+
+                <div id="request-summary" class="status-strip">
+                    Backend status and scoring results will appear here.
+                </div>
+            </section>
+
+            <section class="content-grid">
+                <div class="panel form-panel">
+                    <div class="panel-header">
+                        <h2>Input Builder</h2>
+                        <p>Every field maps directly to the Flask API request contract.</p>
+                    </div>
+                    <form id="demo-form" novalidate>
+                        <div id="section-container" class="section-stack"></div>
+                    </form>
+                </div>
+
+                <div class="panel insights-panel">
+                    <div class="panel-header">
+                        <h2>Runtime & Results</h2>
+                        <p>Health, payload preview, and scoring output stay visible while you edit.</p>
+                    </div>
+
+                    <div class="info-card">
+                        <div class="info-card-header">
+                            <h3>Backend Health</h3>
+                            <button type="button" id="refresh-health" class="ghost-button compact">Refresh</button>
+                        </div>
+                        <dl id="health-card" class="health-grid">
+                            <div><dt>Status</dt><dd>Loading...</dd></div>
+                            <div><dt>Health Version</dt><dd>Loading...</dd></div>
+                            <div><dt>Fairness</dt><dd>Loading...</dd></div>
+                            <div><dt>Tiers</dt><dd>Loading...</dd></div>
+                        </dl>
+                    </div>
+
+                    <div class="info-card">
+                        <h3>Request Payload Preview</h3>
+                        <pre id="payload-preview" class="code-block"></pre>
+                    </div>
+
+                    <div class="info-card">
+                        <h3>Score Response</h3>
+                        <div id="result-summary" class="result-summary empty-state">
+                            Run a score request to populate this panel.
+                        </div>
+                        <pre id="result-json" class="code-block"></pre>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        window.__MASTERMIND_DEMO__ = {{ demo_config | tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='demo.js') }}"></script>
+</body>
+</html>
