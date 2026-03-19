@@ -5,10 +5,18 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+
+from src.builder_artifacts import (
+    DEFAULT_FULL_BUILDER_PATH,
+    DEFAULT_REDUCED_BUILDER_PATH,
+    load_builder_artifact,
+    load_processed_artifact_manifest,
+    processed_manifest_path,
+    save_builder_artifact,
+)
 
 CATEGORICAL_MODEL_COLS = [
     "NAME_CONTRACT_TYPE",
@@ -134,11 +142,15 @@ ALL_AGGREGATE_FEATURE_COLS = (
     + POS_CASH_AGG_COLS
     + CREDIT_CARD_AGG_COLS
 )
-FULL_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/full_feature_builder.joblib"
-REDUCED_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/reduced_feature_builder.joblib"
+FEATURE_ENGINEERING_VERSION = "feature-engineering-manifest-v1"
+AGGREGATE_CONTRACT_VERSION = f"full_{len(ALL_AGGREGATE_FEATURE_COLS)}__reduced_0"
+FULL_FEATURE_BUILDER_ARTIFACT_PATH = DEFAULT_FULL_BUILDER_PATH
+REDUCED_FEATURE_BUILDER_ARTIFACT_PATH = DEFAULT_REDUCED_BUILDER_PATH
 PROCESSED_SPLIT_NAMES = ["train", "val_model", "val_policy", "test"]
 __all__ = [
     "FrozenFeatureBuilder",
+    "FEATURE_ENGINEERING_VERSION",
+    "AGGREGATE_CONTRACT_VERSION",
     "fit_full_builder",
     "fit_reduced_builder",
     "build_full",
@@ -165,11 +177,31 @@ class FrozenFeatureBuilder:
     categorical_columns_: list[str] = field(default_factory=list)
     scaler_: StandardScaler | None = None
 
-    def save(self, path: str) -> None:
-        directory = os.path.dirname(path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-        joblib.dump(self, path)
+    def save(
+        self,
+        path: str,
+        *,
+        fit_df: pd.DataFrame,
+        fit_split_name: str,
+        aggregate_contract_version: str,
+        feature_engineering_version: str = FEATURE_ENGINEERING_VERSION,
+        strict_validation: bool = False,
+        processed_manifest_fingerprint: str | None = None,
+    ) -> dict[str, object]:
+        expected_aggregate_feature_count = (
+            len(ALL_AGGREGATE_FEATURE_COLS) if self.tier.upper() == "FULL" else 0
+        )
+        return save_builder_artifact(
+            self,
+            path,
+            fit_df=fit_df,
+            fit_split_name=fit_split_name,
+            feature_engineering_version=feature_engineering_version,
+            aggregate_contract_version=aggregate_contract_version,
+            expected_aggregate_feature_count=expected_aggregate_feature_count,
+            strict_validation=strict_validation,
+            processed_manifest_fingerprint=processed_manifest_fingerprint,
+        )
 
     def transform(
         self,
@@ -552,23 +584,52 @@ def _fit_builder_from_pre_model_frame(
     )
 
 
-def fit_full_builder(train_df: pd.DataFrame, raw_dir: str = "data/raw/") -> FrozenFeatureBuilder:
+def fit_full_builder(
+    train_df: pd.DataFrame,
+    raw_dir: str = "data/raw/",
+    artifact_path: str | None = None,
+    fit_split_name: str = "train",
+    strict_artifact_validation: bool = False,
+    processed_manifest_fingerprint: str | None = None,
+) -> FrozenFeatureBuilder:
     builder = _fit_builder_from_pre_model_frame(
         _build_pre_model_frame(train_df, "FULL", raw_dir=raw_dir, allow_flattened_full_input=False),
         "FULL",
         ALL_AGGREGATE_FEATURE_COLS,
     )
-    builder.save(FULL_FEATURE_BUILDER_ARTIFACT_PATH)
+    if artifact_path is not None:
+        builder.save(
+            artifact_path,
+            fit_df=train_df,
+            fit_split_name=fit_split_name,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            strict_validation=strict_artifact_validation,
+            processed_manifest_fingerprint=processed_manifest_fingerprint,
+        )
     return builder
 
 
-def fit_reduced_builder(train_df: pd.DataFrame) -> FrozenFeatureBuilder:
+def fit_reduced_builder(
+    train_df: pd.DataFrame,
+    artifact_path: str | None = None,
+    fit_split_name: str = "train",
+    strict_artifact_validation: bool = False,
+    processed_manifest_fingerprint: str | None = None,
+) -> FrozenFeatureBuilder:
     builder = _fit_builder_from_pre_model_frame(
         _build_pre_model_frame(train_df, "REDUCED", raw_dir=None, allow_flattened_full_input=False),
         "REDUCED",
         [],
     )
-    builder.save(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH)
+    if artifact_path is not None:
+        builder.save(
+            artifact_path,
+            fit_df=train_df,
+            fit_split_name=fit_split_name,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            strict_validation=strict_artifact_validation,
+            processed_manifest_fingerprint=processed_manifest_fingerprint,
+        )
     return builder
 
 
@@ -768,12 +829,52 @@ if __name__ == "__main__":
         print("BLOCKED: Stage 4 final acceptance requires data/processed/train.pkl from Module 1")
     else:
         train_df = pd.read_pickle(train_path)
-        reduced_builder = fit_reduced_builder(train_df)
-        full_builder = fit_full_builder(train_df, raw_dir="data/raw/")
+        processed_manifest_fp = None
+        manifest_path = processed_manifest_path(
+            os.environ.get("DATA_PROCESSED_DIR", "data/processed/")
+        )
+        if os.path.exists(manifest_path):
+            processed_manifest = load_processed_artifact_manifest(manifest_path)
+            processed_manifest_fp = processed_manifest["processed_manifest_fingerprint"]
+        reduced_builder = fit_reduced_builder(
+            train_df,
+            artifact_path=REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
+            fit_split_name="train",
+            strict_artifact_validation=True,
+            processed_manifest_fingerprint=processed_manifest_fp,
+        )
+        full_builder = fit_full_builder(
+            train_df,
+            raw_dir="data/raw/",
+            artifact_path=FULL_FEATURE_BUILDER_ARTIFACT_PATH,
+            fit_split_name="train",
+            strict_artifact_validation=True,
+            processed_manifest_fingerprint=processed_manifest_fp,
+        )
         assert os.path.exists(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH)
         assert os.path.exists(FULL_FEATURE_BUILDER_ARTIFACT_PATH)
-        assert isinstance(joblib.load(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH), FrozenFeatureBuilder)
-        assert isinstance(joblib.load(FULL_FEATURE_BUILDER_ARTIFACT_PATH), FrozenFeatureBuilder)
+        loaded_reduced, _, _ = load_builder_artifact(
+            REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
+            fit_df=train_df,
+            expected_tier="REDUCED",
+            fit_split_name="train",
+            feature_engineering_version=FEATURE_ENGINEERING_VERSION,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            expected_aggregate_feature_count=0,
+            expected_processed_manifest_fingerprint=processed_manifest_fp,
+        )
+        loaded_full, _, _ = load_builder_artifact(
+            FULL_FEATURE_BUILDER_ARTIFACT_PATH,
+            fit_df=train_df,
+            expected_tier="FULL",
+            fit_split_name="train",
+            feature_engineering_version=FEATURE_ENGINEERING_VERSION,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            expected_aggregate_feature_count=len(ALL_AGGREGATE_FEATURE_COLS),
+            expected_processed_manifest_fingerprint=processed_manifest_fp,
+        )
+        assert isinstance(loaded_reduced, FrozenFeatureBuilder)
+        assert isinstance(loaded_full, FrozenFeatureBuilder)
         print("  fit builders persisted and reloaded ... PASSED")
         missing_splits = [n for n in ["val_model", "val_policy", "test"] if not os.path.exists(_processed_split_path(n))]
         if missing_splits:

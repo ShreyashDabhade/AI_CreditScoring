@@ -8,8 +8,11 @@ final boolean result.
 
 from __future__ import annotations
 
+import argparse
 import os
 from typing import Any
+
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
 
 import joblib
 import matplotlib
@@ -17,6 +20,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+
+from src.builder_artifacts import (
+    BuilderValidationError,
+    builder_manifest_path,
+    load_builder_artifact,
+    load_processed_artifact_manifest,
+    processed_manifest_path,
+    quarantine_existing_paths,
+)
 
 # ──────────────────────────────────────────────────────────────────────
 # Constants
@@ -43,22 +55,60 @@ def _load_or_fit_full_builder(
     train_raw: pd.DataFrame,
     raw_dir: str = "data/raw/",
     builder_path: str = "artifacts/full_feature_builder.joblib",
+    allow_rebuild: bool = False,
+    strict_artifact_validation: bool = True,
+    processed_manifest_fingerprint: str | None = None,
 ):
-    """Boundary shim for the Module 2 FrozenFeatureBuilder contract."""
-    from src.feature_engineering import FrozenFeatureBuilder, fit_full_builder
+    """Load a validated FULL builder or rebuild only when explicitly allowed."""
+    from src.feature_engineering import (
+        AGGREGATE_CONTRACT_VERSION,
+        ALL_AGGREGATE_FEATURE_COLS,
+        FEATURE_ENGINEERING_VERSION,
+        fit_full_builder,
+    )
 
-    if os.path.exists(builder_path):
-        builder = joblib.load(builder_path)
-        if not isinstance(builder, FrozenFeatureBuilder):
-            raise TypeError(
-                "full_feature_builder.joblib must contain a FrozenFeatureBuilder"
+    try:
+        builder, manifest, _ = load_builder_artifact(
+            builder_path,
+            fit_df=train_raw,
+            expected_tier="FULL",
+            fit_split_name="train",
+            feature_engineering_version=FEATURE_ENGINEERING_VERSION,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            expected_aggregate_feature_count=len(ALL_AGGREGATE_FEATURE_COLS),
+            expected_processed_manifest_fingerprint=processed_manifest_fingerprint,
+        )
+        return builder, manifest, False
+    except BuilderValidationError:
+        if not allow_rebuild:
+            raise BuilderValidationError(
+                "Invalid FULL builder artifact. Re-run src/models/train.py to rebuild "
+                "clean training artifacts, or pass --allow-builder-rebuild for an "
+                "explicit diagnostic rebuild."
             )
-        return builder
 
-    builder = fit_full_builder(train_raw, raw_dir=raw_dir)
-    if builder_path != "artifacts/full_feature_builder.joblib":
-        builder.save(builder_path)
-    return builder
+    builder = fit_full_builder(
+        train_raw,
+        raw_dir=raw_dir,
+        artifact_path=builder_path,
+        fit_split_name="train",
+        strict_artifact_validation=strict_artifact_validation,
+        processed_manifest_fingerprint=processed_manifest_fingerprint,
+    )
+    manifest = None
+    manifest_path = builder_manifest_path(builder_path)
+    if strict_artifact_validation and os.path.exists(manifest_path):
+        _, manifest, _ = load_builder_artifact(
+            builder_path,
+            fit_df=train_raw,
+            expected_tier="FULL",
+            fit_split_name="train",
+            feature_engineering_version=FEATURE_ENGINEERING_VERSION,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            expected_aggregate_feature_count=len(ALL_AGGREGATE_FEATURE_COLS),
+            expected_processed_manifest_fingerprint=processed_manifest_fingerprint,
+        )
+    return builder, manifest, True
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -181,9 +231,9 @@ def compute_fairness_metrics(
                 "eod": np.nan,
                 "brier_ratio": np.nan,
                 "evaluable": False,
-                "di_pass": np.nan,
-                "eod_pass": np.nan,
-                "brier_pass": np.nan,
+                "di_pass": pd.NA,
+                "eod_pass": pd.NA,
+                "brier_pass": pd.NA,
             })
             continue
 
@@ -205,13 +255,15 @@ def compute_fairness_metrics(
             "eod": np.nan,
             "brier_ratio": np.nan,
             "evaluable": True,
-            "di_pass": np.nan,
-            "eod_pass": np.nan,
-            "brier_pass": np.nan,
+            "di_pass": pd.NA,
+            "eod_pass": pd.NA,
+            "brier_pass": pd.NA,
         })
 
     result = pd.DataFrame(rows)
-    eval_mask = result["evaluable"] == True  # noqa: E712
+    for pass_col in ["di_pass", "eod_pass", "brier_pass"]:
+        result[pass_col] = pd.Series(result[pass_col], dtype="boolean")
+    eval_mask = result["evaluable"]
 
     if eval_mask.sum() == 0:
         return result
@@ -376,13 +428,23 @@ def run_full_fairness_audit(
 # main() orchestration
 # ──────────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main(*, allow_builder_rebuild: bool = False) -> None:
     """Module 4 orchestration — detects real vs synthetic data."""
     DATA_PROCESSED_DIR = os.environ.get("DATA_PROCESSED_DIR", "data/processed/")
     ARTIFACT_DIR = os.environ.get("ARTIFACT_DIR", "artifacts/")
     FAIRNESS_PLOTS_DIR = os.environ.get("FAIRNESS_PLOTS_DIR", "notebooks/fairness_plots/")
     SHAP_PLOTS_DIR = os.environ.get("SHAP_PLOTS_DIR", "notebooks/shap_plots/")
     EVAL_PLOTS_DIR = os.environ.get("EVAL_PLOTS_DIR", "notebooks/eval_plots/")
+
+    quarantine_existing_paths(
+        [
+            FAIRNESS_PLOTS_DIR,
+            SHAP_PLOTS_DIR,
+            EVAL_PLOTS_DIR,
+            os.path.join(ARTIFACT_DIR, "model_fairness_audit_passed.joblib"),
+        ],
+        os.path.join(ARTIFACT_DIR, "quarantine", "fairness_outputs"),
+    )
 
     real_data = os.path.exists(os.path.join(DATA_PROCESSED_DIR, "val_policy.pkl"))
 
@@ -396,6 +458,9 @@ def main() -> None:
             train_raw = pickle.load(f)
         with open(os.path.join(DATA_PROCESSED_DIR, "test.pkl"), "rb") as f:
             test_raw = pickle.load(f)
+        processed_manifest = load_processed_artifact_manifest(
+            processed_manifest_path(DATA_PROCESSED_DIR)
+        )
 
         from src.feature_engineering import build_full
         from src.models.train import decision_from_pd, load_artifacts
@@ -406,11 +471,25 @@ def main() -> None:
         calibrator = artifacts["full_calibrator"]
         explainer = artifacts["full_shap_explainer"]
 
-        full_builder = _load_or_fit_full_builder(
+        full_builder_path = os.path.join(ARTIFACT_DIR, "full_feature_builder.joblib")
+        full_builder, full_builder_manifest, builder_was_rebuilt = _load_or_fit_full_builder(
             train_raw,
             raw_dir="data/raw/",
-            builder_path="artifacts/full_feature_builder.joblib",
+            builder_path=full_builder_path,
+            allow_rebuild=allow_builder_rebuild,
+            processed_manifest_fingerprint=processed_manifest["processed_manifest_fingerprint"],
         )
+        if builder_was_rebuilt:
+            print(
+                "Fairness audit used rebuilt FULL builder artifacts at "
+                f"{full_builder_path} "
+                "(explicit --allow-builder-rebuild diagnostic mode)."
+            )
+        elif full_builder_manifest is not None:
+            print(
+                "Fairness audit loaded validated FULL builder manifest from "
+                f"{builder_manifest_path(full_builder_path)}"
+            )
 
         X_test_full = build_full(test_raw, full_builder, raw_dir="data/raw/")
         feature_names = list(X_test_full.columns)
@@ -535,6 +614,13 @@ def main() -> None:
 # ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--allow-builder-rebuild",
+        action="store_true",
+        help="Explicitly rebuild FULL builder artifacts for a diagnostic fairness run.",
+    )
+    cli_args = parser.parse_args()
     # ── Unit tests first ─────────────────────────────────────────────
     print("=" * 60)
     print("Stage 4 — Fairness Group Derivation Tests")
@@ -625,4 +711,4 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Running main() — synthetic mode")
     print("=" * 60)
-    main()
+    main(allow_builder_rebuild=cli_args.allow_builder_rebuild)

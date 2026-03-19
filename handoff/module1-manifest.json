@@ -7,24 +7,25 @@
     "ordered_split_60_10_10_20(df: pd.DataFrame) -> tuple[DataFrame,DataFrame,DataFrame,DataFrame]",
     "fit_missing_policy(train_df: pd.DataFrame) -> tuple[list[str],dict[str,float],dict[str,str]]",
     "apply_missing_policy(df, flag_cols, num_medians, cat_modes, for_linear_model=False) -> pd.DataFrame",
-    "build_adversarial_dataset(train_app, test_app) -> tuple[pd.DataFrame,pd.DataFrame]",
-    "serialize_dataframe(df: pd.DataFrame, path: str) -> None"
+    "build_adversarial_dataset(train_app, test_app) -> tuple[pd.DataFrame,pd.DataFrame]"
   ],
   "routes": [],
   "schema": {
-    "TRAIN_SCHEMA": "dict[str,str — 28 columns with exact dtype strings]",
-    "LOCKED_SCORING_TABLES": "set[str — 6 filenames]",
-    "ADVERSARIAL_ONLY_TABLES": "set[str — 1 filename]",
-    "PREV_SENTINEL_DAY_COLS": "list[str — 5 column names]",
-    "RELATIVE_TIME_COLS": "set[str — 8 column names]",
+    "TRAIN_SCHEMA": "dict[str,str - 28 columns with exact dtype strings]",
+    "LOCKED_SCORING_TABLES": "set[str - 6 filenames]",
+    "ADVERSARIAL_ONLY_TABLES": "set[str - 1 filename]",
+    "PREV_SENTINEL_DAY_COLS": "list[str - 5 column names]",
+    "RELATIVE_TIME_COLS": "set[str - 8 column names]",
     "pkl_format": "pickle protocol=4, pd.DataFrame",
-    "app_test_adv.pkl": "dict with keys adv_train (pd.DataFrame), adv_val (pd.DataFrame), each with ADV_LABEL int column",
-    "income_cap.joblib": "float scalar — 99th percentile of train AMT_INCOME_TOTAL"
+    "scoring_split_order": "sort by abs(DAYS_ID_PUBLISH) desc, abs(DAYS_REGISTRATION) desc, SK_ID_CURR asc, then positional 60/10/10/20 gives train=oldest -> test=newest",
+    "app_test_adv.pkl": "dict with keys adv_train and adv_val; each DataFrame excludes TARGET, includes ADV_LABEL, AMT_INCOME_TOTAL_CAPPED, DAYS_EMPLOYED_ANOM, and matches the non-label application column order",
+    "income_cap.joblib": "float scalar - 99th percentile of train AMT_INCOME_TOTAL",
+    "processed_artifact_manifest.json": "authoritative processed provenance manifest with split summaries, fingerprints, schema hashes, income_cap, adversarial metadata, and processed_manifest_fingerprint"
   },
   "envVars": {
-    "DATA_RAW_DIR": "str — path to raw CSVs, default data/raw/",
-    "DATA_PROCESSED_DIR": "str — path for pkl output, default data/processed/",
-    "EDA_PLOTS_DIR": "str — path for PNG output, default notebooks/eda_plots/"
+    "DATA_RAW_DIR": "str - path to raw CSVs, default data/raw/",
+    "DATA_PROCESSED_DIR": "str - path for pkl output, default data/processed/",
+    "EDA_PLOTS_DIR": "str - path for PNG output, default notebooks/eda_plots/"
   },
   "dependencies": {
     "pandas": "2.1.x",
@@ -41,6 +42,7 @@
     "data/processed/test.pkl",
     "data/processed/app_test_adv.pkl",
     "data/processed/income_cap.joblib",
+    "data/processed/processed_artifact_manifest.json",
     "data/data_quality_report.json",
     "notebooks/eda_plots/target_distribution.png",
     "notebooks/eda_plots/missing_value_heatmap.png",

@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.mplconfig/
 
 # Virtual environments
 venv/
@@ -48,3 +49,6 @@ notebooks/fairness_plots/*
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local diagnostics
+/diagnostic_audit.py

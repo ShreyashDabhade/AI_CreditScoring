@@ -8,14 +8,27 @@ This module handles:
 """
 
 import os
+from typing import Any
+
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 import pickle
 import joblib
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import json
+
+from src.builder_artifacts import (
+    current_git_commit,
+    dataframe_schema_hash,
+    dataset_fingerprint,
+    processed_manifest_fingerprint,
+    processed_manifest_path,
+    quarantine_existing_paths,
+)
 
 
 # ================================
@@ -99,6 +112,194 @@ def enforce_schema(df: pd.DataFrame, schema: dict[str, str]) -> pd.DataFrame:
     return df_copy
 
 
+def _absolute_median(series: pd.Series) -> float:
+    median = series.abs().median(skipna=True)
+    if pd.isna(median):
+        return 0.0
+    return float(median)
+
+
+def _build_staleness_keys(app_df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
+    tmp = app_df.copy()
+    days_id_publish_fill = _absolute_median(tmp["DAYS_ID_PUBLISH"])
+    days_registration_fill = _absolute_median(tmp["DAYS_REGISTRATION"])
+    tmp["__STALENESS_1"] = tmp["DAYS_ID_PUBLISH"].abs().fillna(days_id_publish_fill)
+    tmp["__STALENESS_2"] = tmp["DAYS_REGISTRATION"].abs().fillna(days_registration_fill)
+    return tmp, {
+        "days_id_publish_fill": days_id_publish_fill,
+        "days_registration_fill": days_registration_fill,
+    }
+
+
+def _split_summary_entry(df: pd.DataFrame) -> dict[str, float | int]:
+    return {
+        "rows": int(len(df)),
+        "positive_count": int(df["TARGET"].sum()),
+        "target_rate": float(df["TARGET"].mean()),
+        "mean_abs_days_id_publish": float(df["DAYS_ID_PUBLISH"].abs().mean()),
+        "mean_abs_days_registration": float(df["DAYS_REGISTRATION"].abs().mean()),
+        "days_employed_anom_rate": float(df["DAYS_EMPLOYED_ANOM"].mean()),
+    }
+
+
+def _split_schema_signature(df: pd.DataFrame) -> list[tuple[str, str]]:
+    return [(column, str(df.dtypes[column])) for column in df.columns]
+
+
+def _validate_row_preservation(splits: dict[str, pd.DataFrame], expected_rows: int) -> None:
+    actual_rows = sum(len(df) for df in splits.values())
+    assert actual_rows == expected_rows, (
+        "Split row preservation failed: "
+        f"expected {expected_rows}, found {actual_rows}"
+    )
+
+
+def _validate_split_key_integrity(splits: dict[str, pd.DataFrame]) -> None:
+    seen_ids: set[int] = set()
+    for split_name, df in splits.items():
+        dupes = int(df["SK_ID_CURR"].duplicated().sum())
+        assert dupes == 0, f"{split_name} contains {dupes} duplicate SK_ID_CURR values"
+        split_ids = set(df["SK_ID_CURR"].tolist())
+        overlap = seen_ids.intersection(split_ids)
+        assert not overlap, f"{split_name} overlaps prior splits on SK_ID_CURR"
+        seen_ids.update(split_ids)
+
+
+def _validate_schema_consistency(splits: dict[str, pd.DataFrame]) -> None:
+    split_items = list(splits.items())
+    reference_name, reference_df = split_items[0]
+    reference_signature = _split_schema_signature(reference_df)
+    for split_name, df in split_items[1:]:
+        assert _split_schema_signature(df) == reference_signature, (
+            f"{split_name} schema differs from {reference_name}"
+        )
+
+
+def _validate_monotonic_staleness(split_summary: dict[str, dict[str, float | int]]) -> None:
+    ordered_split_names = ["train", "val_model", "val_policy", "test"]
+    publish_means = [
+        float(split_summary[split_name]["mean_abs_days_id_publish"])
+        for split_name in ordered_split_names
+    ]
+    registration_means = [
+        float(split_summary[split_name]["mean_abs_days_registration"])
+        for split_name in ordered_split_names
+    ]
+    assert all(
+        left >= right for left, right in zip(publish_means, publish_means[1:])
+    ), "DAYS_ID_PUBLISH staleness is not monotonic oldest-to-newest across splits"
+    assert all(
+        left >= right for left, right in zip(registration_means, registration_means[1:])
+    ), "DAYS_REGISTRATION staleness is not monotonic oldest-to-newest across splits"
+
+
+def _validate_processing_contract(
+    splits: dict[str, pd.DataFrame],
+    income_cap: float,
+) -> None:
+    train_income_cap = float(splits["train"]["AMT_INCOME_TOTAL"].quantile(0.99))
+    assert np.isclose(train_income_cap, income_cap), (
+        f"income_cap mismatch: expected {train_income_cap}, found {income_cap}"
+    )
+
+    for split_name, df in splits.items():
+        sentinel_count = int((df["DAYS_EMPLOYED"] == 365243).fillna(False).sum())
+        assert sentinel_count == 0, f"{split_name} still contains DAYS_EMPLOYED sentinel values"
+        expected_capped = np.minimum(df["AMT_INCOME_TOTAL"], income_cap)
+        mismatches = int(
+            (~np.isclose(df["AMT_INCOME_TOTAL_CAPPED"], expected_capped, equal_nan=True)).sum()
+        )
+        assert mismatches == 0, f"{split_name} has {mismatches} AMT_INCOME_TOTAL_CAPPED mismatches"
+        assert int(df["DAYS_EMPLOYED_ANOM"].sum()) == int(df["DAYS_EMPLOYED"].isna().sum()), (
+            f"{split_name} DAYS_EMPLOYED anomaly flag does not match null count"
+        )
+
+
+def _validate_adversarial_contract(
+    adv_train_df: pd.DataFrame,
+    adv_val_df: pd.DataFrame,
+    income_cap: float,
+) -> dict[str, Any]:
+    frames = {"adv_train": adv_train_df, "adv_val": adv_val_df}
+    reference_non_label_columns = [
+        column for column in adv_train_df.columns if column != "ADV_LABEL"
+    ]
+
+    for name, df in frames.items():
+        assert "ADV_LABEL" in df.columns, f"{name} is missing ADV_LABEL"
+        assert "TARGET" not in df.columns, f"{name} must not contain TARGET"
+        assert "AMT_INCOME_TOTAL_CAPPED" in df.columns, (
+            f"{name} is missing AMT_INCOME_TOTAL_CAPPED"
+        )
+        assert "DAYS_EMPLOYED_ANOM" in df.columns, f"{name} is missing DAYS_EMPLOYED_ANOM"
+        assert int(df["SK_ID_CURR"].duplicated().sum()) == 0, (
+            f"{name} contains duplicate SK_ID_CURR values"
+        )
+        assert (
+            [column for column in df.columns if column != "ADV_LABEL"]
+            == reference_non_label_columns
+        ), f"{name} column order differs from adv_train"
+        expected_capped = np.minimum(df["AMT_INCOME_TOTAL"], income_cap)
+        mismatches = int(
+            (~np.isclose(df["AMT_INCOME_TOTAL_CAPPED"], expected_capped, equal_nan=True)).sum()
+        )
+        assert mismatches == 0, f"{name} has {mismatches} adversarial cap mismatches"
+
+    return {
+        "adv_train_rows": int(len(adv_train_df)),
+        "adv_val_rows": int(len(adv_val_df)),
+        "income_cap_used": float(income_cap),
+        "schema_hash": dataframe_schema_hash(adv_train_df),
+        "diagnostic_only": True,
+        "git_commit": current_git_commit(),
+    }
+
+
+def _build_processed_manifest(
+    splits: dict[str, pd.DataFrame],
+    adversarial_summary: dict[str, Any],
+    *,
+    income_cap: float,
+    application_train_cleaned_rows: int,
+) -> dict[str, Any]:
+    manifest: dict[str, Any] = {
+        "manifest_version": 1,
+        "git_commit": current_git_commit(),
+        "application_train_cleaned_rows": int(application_train_cleaned_rows),
+        "income_cap": float(income_cap),
+        "split_summary": {
+            split_name: _split_summary_entry(df)
+            for split_name, df in splits.items()
+        },
+        "split_fingerprints": {
+            split_name: dataset_fingerprint(df)
+            for split_name, df in splits.items()
+        },
+        "split_schema_hashes": {
+            split_name: dataframe_schema_hash(df)
+            for split_name, df in splits.items()
+        },
+        "adversarial_summary": adversarial_summary,
+    }
+    manifest["processed_manifest_fingerprint"] = processed_manifest_fingerprint(manifest)
+    return manifest
+
+
+def _build_data_quality_report(
+    split_summary: dict[str, dict[str, float | int]],
+    income_cap: float,
+) -> dict[str, Any]:
+    return {
+        "split_summary": split_summary,
+        "train_fit_artifacts": {
+            "income_cap_p99": float(income_cap),
+        },
+        "diagnostic_notes": [
+            "Split summaries reflect the corrected forward proxy-time regime.",
+        ],
+    }
+
+
 # ================================
 # TRAP D — MISSING POLICY FUNCTIONS
 # ================================
@@ -156,24 +357,15 @@ def apply_missing_policy(
 # STAGE 3 FUNCTIONS
 # ================================
 
-# ordered holdout using Home Credit recency proxies;
-# not true calendar-time validation
+# ordered holdout using Home Credit proxy staleness;
+# train is oldest, test is newest
 def proxy_recency_sort(app_df: pd.DataFrame) -> pd.DataFrame:
-    tmp = app_df.copy()
-
-    tmp["__RECENCY_1"] = tmp["DAYS_ID_PUBLISH"].abs().fillna(
-        tmp["DAYS_ID_PUBLISH"].abs().median()
-    )
-    tmp["__RECENCY_2"] = tmp["DAYS_REGISTRATION"].abs().fillna(
-        tmp["DAYS_REGISTRATION"].abs().median()
-    )
-
+    tmp, _ = _build_staleness_keys(app_df)
     tmp = tmp.sort_values(
-        ["__RECENCY_1", "__RECENCY_2", "SK_ID_CURR"],
-        ascending=[True, True, True]
+        ["__STALENESS_1", "__STALENESS_2", "SK_ID_CURR"],
+        ascending=[False, False, True]
     )
-
-    tmp = tmp.drop(columns=["__RECENCY_1", "__RECENCY_2"])
+    tmp = tmp.drop(columns=["__STALENESS_1", "__STALENESS_2"])
     return tmp.reset_index(drop=True)
 
 
@@ -193,12 +385,21 @@ def ordered_split_60_10_10_20(df: pd.DataFrame):
 
 
 def build_adversarial_dataset(train_app: pd.DataFrame, test_app: pd.DataFrame):
+    train_aligned = train_app.drop(columns=["TARGET"], errors="ignore").copy()
+    test_aligned = test_app.drop(columns=["TARGET"], errors="ignore").copy()
+    shared_columns = [
+        column
+        for column in train_aligned.columns
+        if column in test_aligned.columns
+    ]
+    train_aligned = train_aligned[shared_columns]
+    test_aligned = test_aligned[shared_columns]
 
     # Step 1: Balance dataset
     min_size = min(len(train_app), len(test_app))
 
-    train_sample = train_app.sample(n=min_size, random_state=42)
-    test_sample = test_app.sample(n=min_size, random_state=42)
+    train_sample = train_aligned.sample(n=min_size, random_state=42)
+    test_sample = test_aligned.sample(n=min_size, random_state=42)
 
     # Step 2: Assign labels
     adv_train = train_sample.copy()
@@ -218,10 +419,9 @@ def build_adversarial_dataset(train_app: pd.DataFrame, test_app: pd.DataFrame):
         random_state=42
     )
 
-    return (
-        adv_X_train.reset_index(drop=True),
-        adv_X_val.reset_index(drop=True)
-    )
+    adv_X_train = adv_X_train.reset_index(drop=True)
+    adv_X_val = adv_X_val.reset_index(drop=True)
+    return (adv_X_train, adv_X_val)
 
 
 # ================================
@@ -256,15 +456,16 @@ if __name__ == "__main__":
 
     # Apply schema
     app_train = enforce_schema(app_train, TRAIN_SCHEMA)
+    app_test = enforce_schema(app_test, TRAIN_SCHEMA)
 
     # ================================
     # TRAP A — DAYS_EMPLOYED FIX
     # ================================
-    app_train["DAYS_EMPLOYED_ANOM"] = (
-        app_train["DAYS_EMPLOYED"] == 365243
-    ).astype("int8")
-
-    app_train["DAYS_EMPLOYED"] = app_train["DAYS_EMPLOYED"].replace(365243, np.nan)
+    for app_df in [app_train, app_test]:
+        app_df["DAYS_EMPLOYED_ANOM"] = (
+            app_df["DAYS_EMPLOYED"] == 365243
+        ).astype("int8")
+        app_df["DAYS_EMPLOYED"] = app_df["DAYS_EMPLOYED"].replace(365243, np.nan)
 
     # ================================
     # TRAP B — PREV_APP FIX
@@ -286,13 +487,19 @@ if __name__ == "__main__":
     app_sorted = proxy_recency_sort(app_train)
 
     train, val_model, val_policy, test = ordered_split_60_10_10_20(app_sorted)
+    scoring_splits = {
+        "train": train,
+        "val_model": val_model,
+        "val_policy": val_policy,
+        "test": test,
+    }
 
     # ================================
     # TRAP C — INCOME CAP
     # ================================
     income_cap = train["AMT_INCOME_TOTAL"].quantile(0.99)
 
-    for partition in [train, val_model, val_policy, test]:
+    for partition in [app_train, app_test, train, val_model, val_policy, test]:
         partition["AMT_INCOME_TOTAL_CAPPED"] = partition["AMT_INCOME_TOTAL"].clip(
             upper=income_cap
         )
@@ -324,20 +531,28 @@ if __name__ == "__main__":
     # ================================
     # VALIDATION CHECKS (STAGE 3)
     # ================================
-    assert len(train) + len(val_model) + len(val_policy) + len(test) == len(app_train)
+    _validate_row_preservation(scoring_splits, len(app_train))
 
     ratio = len(train) / len(app_train)
     assert 0.599 <= ratio <= 0.601
 
-    assert train.index[0] == 0
+    _validate_split_key_integrity(scoring_splits)
+    _validate_schema_consistency(scoring_splits)
+    _validate_processing_contract(scoring_splits, float(income_cap))
 
-    for df in [train, val_model, val_policy, test]:
-        assert "AMT_INCOME_TOTAL_CAPPED" in df.columns
+    split_summary = {
+        split_name: _split_summary_entry(df)
+        for split_name, df in scoring_splits.items()
+    }
+    _validate_monotonic_staleness(split_summary)
+    print("\nForward proxy-time split summary (oldest -> newest):")
+    print(pd.DataFrame(split_summary).T.to_string())
 
-    assert adv_train_df["ADV_LABEL"].nunique() == 2
-
-    val_dist = adv_val_df["ADV_LABEL"].value_counts(normalize=True)
-    assert abs(val_dist[0] - 0.5) < 0.05
+    adversarial_summary = _validate_adversarial_contract(
+        adv_train_df,
+        adv_val_df,
+        float(income_cap),
+    )
     
     # ================================
     # STAGE 4 — DIRECTORY SETUP
@@ -346,6 +561,8 @@ if __name__ == "__main__":
     DATA_PROCESSED_DIR = os.environ.get(
         "DATA_PROCESSED_DIR", "data/processed/"
     )
+    data_quality_report_path = os.path.join("data", "data_quality_report.json")
+    processed_manifest_output_path = processed_manifest_path(DATA_PROCESSED_DIR)
 
     os.makedirs(DATA_PROCESSED_DIR, exist_ok=True)
 
@@ -361,13 +578,27 @@ if __name__ == "__main__":
     # ================================
     # SAVE DATAFRAMES
     # ================================
+    processed_output_paths = [
+        os.path.join(DATA_PROCESSED_DIR, "train.pkl"),
+        os.path.join(DATA_PROCESSED_DIR, "val_model.pkl"),
+        os.path.join(DATA_PROCESSED_DIR, "val_policy.pkl"),
+        os.path.join(DATA_PROCESSED_DIR, "test.pkl"),
+        os.path.join(DATA_PROCESSED_DIR, "app_test_adv.pkl"),
+        os.path.join(DATA_PROCESSED_DIR, "income_cap.joblib"),
+        processed_manifest_output_path,
+        data_quality_report_path,
+    ]
+    quarantine_existing_paths(
+        processed_output_paths,
+        os.path.join("artifacts", "quarantine", "module1_outputs"),
+    )
 
-    serialize_dataframe(train, DATA_PROCESSED_DIR + "train.pkl")
-    serialize_dataframe(val_model, DATA_PROCESSED_DIR + "val_model.pkl")
-    serialize_dataframe(val_policy, DATA_PROCESSED_DIR + "val_policy.pkl")
-    serialize_dataframe(test, DATA_PROCESSED_DIR + "test.pkl")
+    serialize_dataframe(train, os.path.join(DATA_PROCESSED_DIR, "train.pkl"))
+    serialize_dataframe(val_model, os.path.join(DATA_PROCESSED_DIR, "val_model.pkl"))
+    serialize_dataframe(val_policy, os.path.join(DATA_PROCESSED_DIR, "val_policy.pkl"))
+    serialize_dataframe(test, os.path.join(DATA_PROCESSED_DIR, "test.pkl"))
 
-    adv_path = DATA_PROCESSED_DIR + "app_test_adv.pkl"
+    adv_path = os.path.join(DATA_PROCESSED_DIR, "app_test_adv.pkl")
     with open(adv_path, "wb") as f:
         pickle.dump(
             {"adv_train": adv_train_df, "adv_val": adv_val_df},
@@ -380,8 +611,18 @@ if __name__ == "__main__":
     # SAVE INCOME CAP
     # ================================
 
-    joblib.dump(income_cap, DATA_PROCESSED_DIR + "income_cap.joblib")
+    joblib.dump(income_cap, os.path.join(DATA_PROCESSED_DIR, "income_cap.joblib"))
     print(f"income_cap = {income_cap:.2f} saved")
+
+    processed_manifest = _build_processed_manifest(
+        scoring_splits,
+        adversarial_summary,
+        income_cap=float(income_cap),
+        application_train_cleaned_rows=len(app_train),
+    )
+    with open(processed_manifest_output_path, "w", encoding="utf-8") as f:
+        json.dump(processed_manifest, f, indent=2, sort_keys=True)
+    print(f"Saved {processed_manifest_output_path}")
 
     # ================================
     # RELOAD VERIFICATION
@@ -398,10 +639,10 @@ if __name__ == "__main__":
             f"{path} shape mismatch after reload"
 
 
-    verify_dataframe(DATA_PROCESSED_DIR + "train.pkl", train)
-    verify_dataframe(DATA_PROCESSED_DIR + "val_model.pkl", val_model)
-    verify_dataframe(DATA_PROCESSED_DIR + "val_policy.pkl", val_policy)
-    verify_dataframe(DATA_PROCESSED_DIR + "test.pkl", test)
+    verify_dataframe(os.path.join(DATA_PROCESSED_DIR, "train.pkl"), train)
+    verify_dataframe(os.path.join(DATA_PROCESSED_DIR, "val_model.pkl"), val_model)
+    verify_dataframe(os.path.join(DATA_PROCESSED_DIR, "val_policy.pkl"), val_policy)
+    verify_dataframe(os.path.join(DATA_PROCESSED_DIR, "test.pkl"), test)
 
     with open(adv_path, "rb") as f:
         adv_loaded = pickle.load(f)
@@ -409,8 +650,16 @@ if __name__ == "__main__":
     assert isinstance(adv_loaded, dict)
     assert set(adv_loaded.keys()) == {"adv_train", "adv_val"}
 
-    loaded_income_cap = joblib.load(DATA_PROCESSED_DIR + "income_cap.joblib")
+    loaded_income_cap = joblib.load(os.path.join(DATA_PROCESSED_DIR, "income_cap.joblib"))
     assert isinstance(loaded_income_cap, float)
+    assert np.isclose(loaded_income_cap, processed_manifest["income_cap"])
+
+    with open(processed_manifest_output_path, "r", encoding="utf-8") as f:
+        saved_manifest = json.load(f)
+    assert (
+        saved_manifest["processed_manifest_fingerprint"]
+        == processed_manifest_fingerprint(saved_manifest)
+    ), "Saved processed manifest fingerprint mismatch"
 
     print("\nAll serialization checks passed.")
     
@@ -423,6 +672,17 @@ if __name__ == "__main__":
     )
 
     os.makedirs(EDA_PLOTS_DIR, exist_ok=True)
+    eda_plot_paths = [
+        os.path.join(EDA_PLOTS_DIR, "target_distribution.png"),
+        os.path.join(EDA_PLOTS_DIR, "missing_value_heatmap.png"),
+        os.path.join(EDA_PLOTS_DIR, "ext_source_correlation.png"),
+        os.path.join(EDA_PLOTS_DIR, "days_employed_anomaly.png"),
+        os.path.join(EDA_PLOTS_DIR, "income_outliers.png"),
+    ]
+    quarantine_existing_paths(
+        eda_plot_paths,
+        os.path.join("artifacts", "quarantine", "module1_eda"),
+    )
     
     # Plot 1 — Target Distribution
     
@@ -573,34 +833,9 @@ if __name__ == "__main__":
     
     # Data Quality Report
     
-    report = {
-        "dataset": "application_train",
-        "total_rows": int(len(app_train)),
-        "total_cols": int(len(app_train.columns)),
-        "target_default_rate": float(train["TARGET"].mean().round(4)),
-        "class_counts": {
-            str(k): int(v)
-            for k, v in train["TARGET"].value_counts().items()
-        },
-        "sentinel_counts": {
-            "DAYS_EMPLOYED_365243":
-                int(app_train["DAYS_EMPLOYED_ANOM"].sum())
-        },
-        "missing_rates": {
-            col: float(round(rate, 4))
-            for col, rate in app_train.isna().mean().items()
-            if rate > 0
-        },
-        "income_cap_p99": float(round(income_cap, 2)),
-        "split_sizes": {
-            "train": int(len(train)),
-            "val_model": int(len(val_model)),
-            "val_policy": int(len(val_policy)),
-            "test": int(len(test))
-        }
-    }
+    report = _build_data_quality_report(split_summary, float(income_cap))
 
-    with open("data/data_quality_report.json", "w") as f:
+    with open(data_quality_report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
     print("data_quality_report.json saved")

@@ -1,90 +1,42 @@
 {
-  "dataset": "application_train",
-  "total_rows": 307511,
-  "total_cols": 123,
-  "target_default_rate": 0.0907,
-  "class_counts": {
-    "0": 167774,
-    "1": 16732
+  "split_summary": {
+    "train": {
+      "rows": 184506,
+      "positive_count": 13058,
+      "target_rate": 0.07077276619730524,
+      "mean_abs_days_id_publish": 4074.8964207126055,
+      "mean_abs_days_registration": 5263.6454534902205,
+      "days_employed_anom_rate": 0.2580620684422187
+    },
+    "val_model": {
+      "rows": 30751,
+      "positive_count": 2756,
+      "target_rate": 0.08962310168774999,
+      "mean_abs_days_id_publish": 2360.2625280478683,
+      "mean_abs_days_registration": 4630.505479496602,
+      "days_employed_anom_rate": 0.08637117492114077
+    },
+    "val_policy": {
+      "rows": 30751,
+      "positive_count": 2865,
+      "target_rate": 0.09316770186335403,
+      "mean_abs_days_id_publish": 1715.4747162693895,
+      "mean_abs_days_registration": 4565.565770218855,
+      "days_employed_anom_rate": 0.06370524535787454
+    },
+    "test": {
+      "rows": 61503,
+      "positive_count": 6146,
+      "target_rate": 0.0999300847113149,
+      "mean_abs_days_id_publish": 708.4911467733282,
+      "mean_abs_days_registration": 4541.6368795018125,
+      "days_employed_anom_rate": 0.051135716956896414
+    }
   },
-  "sentinel_counts": {
-    "DAYS_EMPLOYED_365243": 55374
+  "train_fit_artifacts": {
+    "income_cap_p99": 450000.0
   },
-  "missing_rates": {
-    "AMT_ANNUITY": 0.0,
-    "AMT_GOODS_PRICE": 0.0009,
-    "NAME_TYPE_SUITE": 0.0042,
-    "DAYS_EMPLOYED": 0.1801,
-    "OWN_CAR_AGE": 0.6599,
-    "OCCUPATION_TYPE": 0.3135,
-    "CNT_FAM_MEMBERS": 0.0,
-    "EXT_SOURCE_1": 0.5638,
-    "EXT_SOURCE_2": 0.0021,
-    "EXT_SOURCE_3": 0.1983,
-    "APARTMENTS_AVG": 0.5075,
-    "BASEMENTAREA_AVG": 0.5852,
-    "YEARS_BEGINEXPLUATATION_AVG": 0.4878,
-    "YEARS_BUILD_AVG": 0.665,
-    "COMMONAREA_AVG": 0.6987,
-    "ELEVATORS_AVG": 0.533,
-    "ENTRANCES_AVG": 0.5035,
-    "FLOORSMAX_AVG": 0.4976,
-    "FLOORSMIN_AVG": 0.6785,
-    "LANDAREA_AVG": 0.5938,
-    "LIVINGAPARTMENTS_AVG": 0.6835,
-    "LIVINGAREA_AVG": 0.5019,
-    "NONLIVINGAPARTMENTS_AVG": 0.6943,
-    "NONLIVINGAREA_AVG": 0.5518,
-    "APARTMENTS_MODE": 0.5075,
-    "BASEMENTAREA_MODE": 0.5852,
-    "YEARS_BEGINEXPLUATATION_MODE": 0.4878,
-    "YEARS_BUILD_MODE": 0.665,
-    "COMMONAREA_MODE": 0.6987,
-    "ELEVATORS_MODE": 0.533,
-    "ENTRANCES_MODE": 0.5035,
-    "FLOORSMAX_MODE": 0.4976,
-    "FLOORSMIN_MODE": 0.6785,
-    "LANDAREA_MODE": 0.5938,
-    "LIVINGAPARTMENTS_MODE": 0.6835,
-    "LIVINGAREA_MODE": 0.5019,
-    "NONLIVINGAPARTMENTS_MODE": 0.6943,
-    "NONLIVINGAREA_MODE": 0.5518,
-    "APARTMENTS_MEDI": 0.5075,
-    "BASEMENTAREA_MEDI": 0.5852,
-    "YEARS_BEGINEXPLUATATION_MEDI": 0.4878,
-    "YEARS_BUILD_MEDI": 0.665,
-    "COMMONAREA_MEDI": 0.6987,
-    "ELEVATORS_MEDI": 0.533,
-    "ENTRANCES_MEDI": 0.5035,
-    "FLOORSMAX_MEDI": 0.4976,
-    "FLOORSMIN_MEDI": 0.6785,
-    "LANDAREA_MEDI": 0.5938,
-    "LIVINGAPARTMENTS_MEDI": 0.6835,
-    "LIVINGAREA_MEDI": 0.5019,
-    "NONLIVINGAPARTMENTS_MEDI": 0.6943,
-    "NONLIVINGAREA_MEDI": 0.5518,
-    "FONDKAPREMONT_MODE": 0.6839,
-    "HOUSETYPE_MODE": 0.5018,
-    "TOTALAREA_MODE": 0.4827,
-    "WALLSMATERIAL_MODE": 0.5084,
-    "EMERGENCYSTATE_MODE": 0.474,
-    "OBS_30_CNT_SOCIAL_CIRCLE": 0.0033,
-    "DEF_30_CNT_SOCIAL_CIRCLE": 0.0033,
-    "OBS_60_CNT_SOCIAL_CIRCLE": 0.0033,
-    "DEF_60_CNT_SOCIAL_CIRCLE": 0.0033,
-    "DAYS_LAST_PHONE_CHANGE": 0.0,
-    "AMT_REQ_CREDIT_BUREAU_HOUR": 0.135,
-    "AMT_REQ_CREDIT_BUREAU_DAY": 0.135,
-    "AMT_REQ_CREDIT_BUREAU_WEEK": 0.135,
-    "AMT_REQ_CREDIT_BUREAU_MON": 0.135,
-    "AMT_REQ_CREDIT_BUREAU_QRT": 0.135,
-    "AMT_REQ_CREDIT_BUREAU_YEAR": 0.135
-  },
-  "income_cap_p99": 495000.0,
-  "split_sizes": {
-    "train": 184506,
-    "val_model": 30751,
-    "val_policy": 30751,
-    "test": 61503
-  }
+  "diagnostic_notes": [
+    "Split summaries reflect the corrected forward proxy-time regime."
+  ]
 }

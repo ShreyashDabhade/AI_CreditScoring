@@ -39,5 +39,6 @@ endpoint.
    raw numpy array. Module 5 must build this Series from SHAP values.
 5. `plot_fbeta_sweep` returns the best diagnostic threshold as a float. This is NOT used
    to set the decision policy. The production policy uses fixed thresholds 0.15/0.35.
-6. The existing Module 2 uses a `FrozenFeatureBuilder` pattern. The `main()` function in
-   `fairness_audit.py` handles both loading a saved builder and fitting a new one.
+6. The existing Module 2 uses a `FrozenFeatureBuilder` pattern. `fairness_audit.py`
+   now validates persisted builder manifests in strict mode by default and only rebuilds
+   a builder when `--allow-builder-rebuild` is passed explicitly for diagnostic use.

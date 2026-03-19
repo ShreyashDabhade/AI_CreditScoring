@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def _make_application_df(sk_ids: list[int], include_target: bool = True) -> pd.DataFrame:
@@ -243,17 +244,125 @@ def test_builder_shim_loads_or_fits_m2_builder_for_m4(tmp_path, monkeypatch):
     _write_raw_tables(raw_dir, sk_ids)
     train_df = _make_application_df(sk_ids)
 
-    built = _load_or_fit_full_builder(
+    built, _, built_rebuilt = _load_or_fit_full_builder(
         train_df,
         raw_dir=str(raw_dir),
         builder_path=str(builder_path),
+        allow_rebuild=True,
+        strict_artifact_validation=False,
     )
-    loaded = _load_or_fit_full_builder(
+    loaded, _, loaded_rebuilt = _load_or_fit_full_builder(
         train_df,
         raw_dir=str(raw_dir),
         builder_path=str(builder_path),
+        allow_rebuild=True,
+        strict_artifact_validation=False,
     )
 
     assert isinstance(built, FrozenFeatureBuilder)
     assert isinstance(loaded, FrozenFeatureBuilder)
     assert builder_path.exists()
+    assert built_rebuilt is True
+    assert loaded_rebuilt is True
+
+
+def test_synthetic_builder_fit_does_not_touch_shared_artifacts(tmp_path):
+    from src.builder_artifacts import (
+        DEFAULT_FULL_BUILDER_PATH,
+        DEFAULT_REDUCED_BUILDER_PATH,
+        builder_manifest_path,
+    )
+    from src.feature_engineering import fit_full_builder, fit_reduced_builder
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [300001, 300002, 300003, 300004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+
+    tracked_paths = [
+        Path(DEFAULT_FULL_BUILDER_PATH),
+        Path(DEFAULT_REDUCED_BUILDER_PATH),
+        Path(builder_manifest_path(DEFAULT_FULL_BUILDER_PATH)),
+        Path(builder_manifest_path(DEFAULT_REDUCED_BUILDER_PATH)),
+    ]
+    before = {
+        str(path): path.stat().st_mtime_ns
+        for path in tracked_paths
+        if path.exists()
+    }
+
+    fit_full_builder(train_df, raw_dir=str(raw_dir))
+    fit_reduced_builder(train_df)
+
+    after = {
+        str(path): path.stat().st_mtime_ns
+        for path in tracked_paths
+        if path.exists()
+    }
+    assert after == before
+
+
+def test_strict_loader_rejects_toy_full_builder_artifact(tmp_path):
+    from src.builder_artifacts import BuilderValidationError, load_builder_artifact
+    from src.feature_engineering import (
+        AGGREGATE_CONTRACT_VERSION,
+        ALL_AGGREGATE_FEATURE_COLS,
+        FEATURE_ENGINEERING_VERSION,
+        fit_full_builder,
+    )
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [400001, 400002, 400003, 400004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+    builder_path = tmp_path / "toy_full_builder.joblib"
+
+    fit_full_builder(
+        train_df,
+        raw_dir=str(raw_dir),
+        artifact_path=str(builder_path),
+        fit_split_name="train",
+        strict_artifact_validation=False,
+    )
+
+    with pytest.raises(BuilderValidationError):
+        load_builder_artifact(
+            str(builder_path),
+            fit_df=train_df,
+            expected_tier="FULL",
+            fit_split_name="train",
+            feature_engineering_version=FEATURE_ENGINEERING_VERSION,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            expected_aggregate_feature_count=len(ALL_AGGREGATE_FEATURE_COLS),
+        )
+
+
+def test_strict_loader_rejects_toy_reduced_builder_artifact(tmp_path):
+    from src.builder_artifacts import BuilderValidationError, load_builder_artifact
+    from src.feature_engineering import (
+        AGGREGATE_CONTRACT_VERSION,
+        FEATURE_ENGINEERING_VERSION,
+        fit_reduced_builder,
+    )
+
+    sk_ids = [500001, 500002, 500003, 500004]
+    train_df = _make_application_df(sk_ids)
+    builder_path = tmp_path / "toy_reduced_builder.joblib"
+
+    fit_reduced_builder(
+        train_df,
+        artifact_path=str(builder_path),
+        fit_split_name="train",
+        strict_artifact_validation=False,
+    )
+
+    with pytest.raises(BuilderValidationError):
+        load_builder_artifact(
+            str(builder_path),
+            fit_df=train_df,
+            expected_tier="REDUCED",
+            fit_split_name="train",
+            feature_engineering_version=FEATURE_ENGINEERING_VERSION,
+            aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+            expected_aggregate_feature_count=0,
+        )

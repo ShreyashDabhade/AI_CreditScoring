@@ -3,8 +3,8 @@
 ### What this module does
 Splits feature engineering into a train-only `fit` stage and a frozen `transform` stage.
 
-- `fit_full_builder(train_df, raw_dir)` builds the FULL pre-model train frame, fits rare-category policy, fits missing-flag eligibility at `>=5%`, fits numeric imputers, freezes encoded output columns, fits the scaler for true numeric feature columns only, and persists `artifacts/full_feature_builder.joblib`.
-- `fit_reduced_builder(train_df)` does the same for REDUCED and persists `artifacts/reduced_feature_builder.joblib`.
+- `fit_full_builder(train_df, raw_dir, artifact_path=None)` builds the FULL pre-model train frame, fits rare-category policy, fits missing-flag eligibility at `>=5%`, fits numeric imputers, freezes encoded output columns, and only persists a builder artifact when an explicit `artifact_path` is provided.
+- `fit_reduced_builder(train_df, artifact_path=None)` does the same for REDUCED and only persists when an explicit artifact path is provided.
 - `build_full(df, builder, raw_dir)` and `build_reduced(df, builder)` are transform-only wrappers. They never refit policy.
 
 ### What this module expects from other modules
@@ -43,6 +43,7 @@ X_train_full = build_full(train_df, full_builder, raw_dir="data/raw/")
 - Output columns are aligned exactly to `builder.encoded_columns_`.
 - Fairness raw columns and fairness-derived missing flags never appear in the model matrix.
 - Scaling is applied only to frozen numeric feature columns, never to one-hot dummy columns or `_IS_MISSING` flags.
+- Persisted builders are now paired with manifest files and must be loaded through the shared builder-artifact validator.
 
 ### Known blockers and limitations
 1. Final Stage 4 acceptance is blocked until Module 1 provides `data/processed/train.pkl`.
