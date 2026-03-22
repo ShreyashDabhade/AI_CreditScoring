@@ -384,7 +384,11 @@ def main() -> None:
     SHAP_PLOTS_DIR = os.environ.get("SHAP_PLOTS_DIR", "notebooks/shap_plots/")
     EVAL_PLOTS_DIR = os.environ.get("EVAL_PLOTS_DIR", "notebooks/eval_plots/")
 
-    real_data = os.path.exists(os.path.join(DATA_PROCESSED_DIR, "val_policy.pkl"))
+    val_policy_path = os.path.join(DATA_PROCESSED_DIR, "val_policy.pkl")
+    real_data = os.path.exists(val_policy_path)
+    print(f"[Module 4 Real Data Audit] Checking for real data at '{val_policy_path}' — found: {real_data}")
+    print(f"[Module 4] FORCING REAL DATA MODE per user directive")
+    real_data = True  # FORCE REAL MODE
 
     if real_data:
         import pickle
@@ -392,29 +396,85 @@ def main() -> None:
 
         sys.path.insert(0, ".")
 
-        with open(os.path.join(DATA_PROCESSED_DIR, "train.pkl"), "rb") as f:
-            train_raw = pickle.load(f)
-        with open(os.path.join(DATA_PROCESSED_DIR, "test.pkl"), "rb") as f:
-            test_raw = pickle.load(f)
+        print("[M4] Loading pickles...")
+        try:
+            with open(os.path.join(DATA_PROCESSED_DIR, "train.pkl"), "rb") as f:
+                train_raw = pickle.load(f)
+            print(f"[M4]   ✓ train.pkl loaded: {train_raw.shape}")
+            with open(os.path.join(DATA_PROCESSED_DIR, "test.pkl"), "rb") as f:
+                test_raw = pickle.load(f)
+            print(f"[M4]   ✓ test.pkl loaded: {test_raw.shape}")
+        except Exception as e:
+            print(f"[M4] ✗ Error loading pickles: {e}")
+            raise
 
-        from src.feature_engineering import build_full
-        from src.models.train import decision_from_pd, load_artifacts
+        print("[M4] Loading modules...")
+        try:
+            from src.feature_engineering import build_full
+            from src.models.train import decision_from_pd, load_artifacts
+            print("[M4]   ✓ Modules imported")
+        except Exception as e:
+            print(f"[M4] ✗ Error importing modules: {e}")
+            raise
 
-        artifacts = load_artifacts(ARTIFACT_DIR)
+        print("[M4] Loading artifacts...")
+        try:
+            artifacts = load_artifacts(ARTIFACT_DIR)
+            print(f"[M4]   ✓ Artifacts loaded")
 
-        model = artifacts["full_model"]
-        calibrator = artifacts["full_calibrator"]
-        explainer = artifacts["full_shap_explainer"]
+            model = artifacts.get("full_model")
+            calibrator = artifacts.get("full_calibrator")
+            explainer = artifacts.get("full_shap_explainer")
+            print(f"[M4]   ✓ model={type(model).__name__}, calibrator={type(calibrator).__name__}, explainer={type(explainer).__name__}")
+        except Exception as e:
+            print(f"[M4] ✗ Error loading artifacts: {e}")
+            raise
 
-        full_builder = _load_or_fit_full_builder(
-            train_raw,
-            raw_dir="data/raw/",
-            builder_path="artifacts/full_feature_builder.joblib",
-        )
+        print("[M4] Loading feature builder...")
+        try:
+            full_builder = _load_or_fit_full_builder(
+                train_raw,
+                raw_dir="data/raw/",
+                builder_path="artifacts/full_feature_builder.joblib",
+            )
+            print(f"[M4]   ✓ Feature builder loaded")
+        except Exception as e:
+            print(f"[M4] ✗ Error loading feature builder: {e}")
+            raise
 
-        X_test_full = build_full(test_raw, full_builder, raw_dir="data/raw/")
-        feature_names = list(X_test_full.columns)
-        X_test_arr = X_test_full.values
+        print("[M4] Building features (this may take 1-2 minutes)...")
+        try:
+            X_test_full = build_full(test_raw, full_builder, raw_dir="data/raw/")
+            print(f"[M4]   ✓ Features built: {X_test_full.shape}")
+            feature_names = list(X_test_full.columns)
+            X_test_arr = X_test_full.values
+        except Exception as e:
+            print(f"[M4] ✗ Error building features: {e}")
+            raise
+
+        if model is None or calibrator is None or explainer is None:
+            print("WARNING: Missing Module 3 artifacts; training fallback model for Module 4 execution.")
+            import xgboost as xgb
+            from sklearn.calibration import CalibratedClassifierCV
+            import shap
+
+            X_train_full = build_full(train_raw, full_builder, raw_dir="data/raw/")
+            y_train = train_raw["TARGET"].values
+
+            model = xgb.XGBClassifier(
+                n_estimators=100,
+                random_state=42,
+                eval_metric="logloss",
+                use_label_encoder=False,
+            )
+            model.fit(X_train_full.values, y_train)
+
+            if calibrator is None:
+                calibrator = CalibratedClassifierCV(base_estimator=model, cv=3, method="sigmoid")
+                calibrator.fit(X_train_full.values, y_train)
+
+            if explainer is None:
+                explainer = shap.TreeExplainer(model)
 
         raw_pds = model.predict_proba(X_test_arr)[:, 1]
         cal_pds = calibrator.predict(raw_pds)
