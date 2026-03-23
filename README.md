@@ -7,8 +7,8 @@ MasterMind is an explainable credit scoring system built on the Home Credit Defa
 The current workflow is:
 
 1. Run Module 1 to create processed splits and `data/processed/processed_artifact_manifest.json`.
-2. Run Module 2 to persist the lineage-validated FULL builder.
-3. Run Module 3 to persist trained models, calibrators, SHAP explainers, and `artifacts/reproducibility_report.json`.
+2. Run Module 2 to persist the lineage-validated FULL and REDUCED builders.
+3. Run Module 3 to persist trained FULL and REDUCED models, calibrators, SHAP explainers, and `artifacts/reproducibility_report.json`.
 4. Run Module 4 to persist `artifacts/model_fairness_audit_passed.joblib`.
 5. Start Module 5, which eagerly validates and loads those artifacts once at startup.
 
@@ -29,10 +29,13 @@ python -m pip install -r requirements.txt
 Module 5 requires these persisted artifacts before real-mode startup:
 
 - `data/processed/processed_artifact_manifest.json`
-- validated FULL builder loaded through `src/builder_artifacts.py`
+- validated FULL and REDUCED builders loaded through `src/builder_artifacts.py`
 - `artifacts/full_model.joblib`
 - `artifacts/full_calibrator.joblib`
 - `artifacts/full_shap_explainer.joblib`
+- `artifacts/reduced_model.joblib`
+- `artifacts/reduced_calibrator.joblib`
+- `artifacts/reduced_shap_explainer.joblib`
 - `artifacts/model_fairness_audit_passed.joblib`
 - optional `artifacts/reproducibility_report.json` for deployed metadata
 
@@ -81,11 +84,53 @@ Returns:
   "status": "ok",
   "model_version": "full_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1",
   "fairness_audit_passed": true,
-  "coverage_tiers_available": ["FULL"]
+  "coverage_tiers_available": ["FULL", "REDUCED"]
 }
 ```
 
 `POST /score`
+
+REDUCED example:
+
+```json
+{
+  "application": {
+    "AMT_INCOME_TOTAL_CAPPED": 120000.0,
+    "AMT_CREDIT": 250000.0,
+    "AMT_ANNUITY": 25000.0,
+    "AMT_GOODS_PRICE": 220000.0,
+    "DAYS_BIRTH": -12000.0,
+    "DAYS_EMPLOYED": -1500.0,
+    "DAYS_REGISTRATION": -3000.0,
+    "DAYS_ID_PUBLISH": -2000.0,
+    "DAYS_LAST_PHONE_CHANGE": -1000.0,
+    "REGION_POPULATION_RELATIVE": 0.02,
+    "EXT_SOURCE_1": 0.2,
+    "EXT_SOURCE_2": 0.4,
+    "EXT_SOURCE_3": 0.6,
+    "CNT_FAM_MEMBERS": 2.0,
+    "OWN_CAR_AGE": 5.0,
+    "OBS_30_CNT_SOCIAL_CIRCLE": 1.0,
+    "DEF_30_CNT_SOCIAL_CIRCLE": 0.0,
+    "OBS_60_CNT_SOCIAL_CIRCLE": 1.0,
+    "DEF_60_CNT_SOCIAL_CIRCLE": 0.0,
+    "AMT_REQ_CREDIT_BUREAU_HOUR": 0.0,
+    "AMT_REQ_CREDIT_BUREAU_DAY": 0.0,
+    "AMT_REQ_CREDIT_BUREAU_WEEK": 1.0,
+    "AMT_REQ_CREDIT_BUREAU_MON": 1.0,
+    "AMT_REQ_CREDIT_BUREAU_QRT": 0.0,
+    "AMT_REQ_CREDIT_BUREAU_YEAR": 1.0,
+    "NAME_CONTRACT_TYPE": "Cash loans",
+    "NAME_TYPE_SUITE": "Unaccompanied",
+    "NAME_EDUCATION_TYPE": "Higher education",
+    "NAME_FAMILY_STATUS": "Married",
+    "OCCUPATION_TYPE": "Laborers",
+    "ORGANIZATION_TYPE": "Business Entity Type 3",
+    "WEEKDAY_APPR_PROCESS_START": "MONDAY",
+    "DAYS_EMPLOYED_ANOM": 0
+  }
+}
+```
 
 FULL example:
 
@@ -145,7 +190,7 @@ FULL example:
 }
 ```
 
-Application-only starter payloads are not supported in the current API. `/score` expects the complete FULL payload.
+`/score` supports both application-only REDUCED payloads and complete FULL payloads.
 
 Success response:
 
@@ -157,11 +202,11 @@ Success response:
   "top_5_explanations": [
     { "feature": "BUREAU_LOAN_COUNT", "reason": "External credit history indicates elevated repayment risk" }
   ],
-  "model_version": "full_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1",
+  "model_version": "reduced_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1",
   "calibrated": true,
   "model_fairness_audit_passed": true,
   "fairness_audit_version": "proxy_audit_2026Q1_v1.0",
-  "coverage_tier": "FULL"
+  "coverage_tier": "REDUCED"
 }
 ```
 

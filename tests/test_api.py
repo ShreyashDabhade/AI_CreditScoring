@@ -150,12 +150,22 @@ def _write_processed_manifest(processed_dir: Path) -> None:
 def _write_real_artifacts(artifact_dir: Path) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     full_builder = SavedBuilderFixture("FULL")
+    reduced_builder = SavedBuilderFixture("REDUCED")
     joblib.dump(SavedModelFixture(len(full_builder.columns)), artifact_dir / "full_model.joblib")
     joblib.dump(SavedCalibratorFixture(), artifact_dir / "full_calibrator.joblib")
     joblib.dump(SavedExplainerFixture(), artifact_dir / "full_shap_explainer.joblib")
+    joblib.dump(SavedModelFixture(len(reduced_builder.columns)), artifact_dir / "reduced_model.joblib")
+    joblib.dump(SavedCalibratorFixture(), artifact_dir / "reduced_calibrator.joblib")
+    joblib.dump(SavedExplainerFixture(), artifact_dir / "reduced_shap_explainer.joblib")
     joblib.dump(True, artifact_dir / "model_fairness_audit_passed.joblib")
     (artifact_dir / "reproducibility_report.json").write_text(
-        json.dumps({"deployed_model_version": "deployed-full-2026.03"}),
+        json.dumps(
+            {
+                "deployed_model_version": "deployed-full-2026.03",
+                "full_model_version": "deployed-full-2026.03",
+                "reduced_model_version": "deployed-reduced-2026.03",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -197,7 +207,7 @@ def test_health_returns_required_fields():
         "coverage_tiers_available",
     }
     assert payload["status"] == "ok"
-    assert payload["coverage_tiers_available"] == ["FULL"]
+    assert payload["coverage_tiers_available"] == ["FULL", "REDUCED"]
 
 
 def test_demo_routes_render_frontend():
@@ -212,14 +222,15 @@ def test_demo_routes_render_frontend():
     assert "window.__MASTERMIND_DEMO__" in demo_response.get_data(as_text=True)
 
 
-def test_score_application_only_returns_422():
+def test_score_application_only_returns_200_for_reduced():
     client = create_app(mock_mode=True).test_client()
 
     response = client.post("/score", json={"application": _make_application_payload()})
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     payload = response.get_json()
-    assert payload["error_code"] == "starter_not_supported_in_mvp"
+    assert payload["coverage_tier"] == "REDUCED"
+    assert payload["model_version"].startswith("reduced_v")
 
 
 def test_score_valid_full_returns_200():
@@ -317,10 +328,9 @@ def test_validate_payload_and_determine_coverage_tier_happy_paths():
 
     assert determine_coverage_tier(full) == "FULL"
     assert validate_payload(full) == (None, [])
-    assert validate_payload({"application": _make_application_payload()}) == (
-        "starter_not_supported_in_mvp",
-        [],
-    )
+    reduced = {"application": _make_application_payload()}
+    assert determine_coverage_tier(reduced) == "REDUCED"
+    assert validate_payload(reduced) == (None, [])
 
 
 def test_validate_payload_rejects_unknown_top_level_keys():
@@ -341,12 +351,12 @@ def test_build_input_df_builds_full_payload():
     assert "CC_RECORD_COUNT" in full_df.columns
 
 
-def test_build_input_df_rejects_non_full_tier():
-    try:
-        build_input_df(_make_full_payload(), "REDUCED")
-        assert False, "Expected non-FULL tier rejection"
-    except ValueError as exc:
-        assert "FULL" in str(exc)
+def test_build_input_df_builds_reduced_payload():
+    reduced_df = build_input_df({"application": _make_application_payload()}, "REDUCED")
+
+    assert reduced_df.shape[0] == 1
+    assert "AMT_CREDIT" in reduced_df.columns
+    assert "BUREAU_LOAN_COUNT" not in reduced_df.columns
 
 
 def test_build_input_df_rejects_duplicate_flattened_columns():
@@ -407,6 +417,7 @@ def test_strict_real_mode_fails_when_non_builder_artifact_is_missing(tmp_path, m
     def loader(**kwargs):
         return {
             "full_builder": SavedBuilderFixture("FULL"),
+            "reduced_builder": SavedBuilderFixture("REDUCED"),
         }
 
     _install_fake_builder_module(monkeypatch, loader)
@@ -431,6 +442,7 @@ def test_real_mode_health_prefers_reproducibility_report_metadata(tmp_path, monk
     def loader(**kwargs):
         return {
             "full_builder": SavedBuilderFixture("FULL"),
+            "reduced_builder": SavedBuilderFixture("REDUCED"),
         }
 
     _install_fake_builder_module(monkeypatch, loader)
@@ -459,3 +471,30 @@ def test_internal_error_path_returns_500():
         "error_code": "internal_error",
         "message": "Scoring failed.",
     }
+
+
+def test_real_mode_score_application_only_uses_reduced_artifacts(tmp_path, monkeypatch):
+    artifact_dir = tmp_path / "artifacts"
+    processed_dir = tmp_path / "processed"
+    _write_processed_manifest(processed_dir)
+    _write_real_artifacts(artifact_dir)
+
+    def loader(**kwargs):
+        return {
+            "full_builder": SavedBuilderFixture("FULL"),
+            "reduced_builder": SavedBuilderFixture("REDUCED"),
+        }
+
+    _install_fake_builder_module(monkeypatch, loader)
+    app = create_app(
+        artifact_dir=str(artifact_dir),
+        processed_dir=str(processed_dir),
+        mock_mode=False,
+    )
+
+    response = app.test_client().post("/score", json={"application": _make_application_payload()})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["coverage_tier"] == "REDUCED"
+    assert payload["model_version"] == "deployed-reduced-2026.03"

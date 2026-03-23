@@ -39,6 +39,7 @@ from configs.config import (
 from src.feature_engineering import (
     ALL_AGGREGATE_FEATURE_COLS,
     FULL_FEATURE_BUILDER_ARTIFACT_PATH,
+    REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
     _agg_bureau,
     _agg_credit_card,
     _agg_installments,
@@ -47,6 +48,8 @@ from src.feature_engineering import (
     _build_pre_model_frame,
     _fit_builder_from_pre_model_frame,
     build_full,
+    build_reduced,
+    fit_reduced_builder,
 )
 from src.models.runtime_support import LogisticProbabilityCalibrator, TreeShapExplainer
 
@@ -90,6 +93,10 @@ def load_artifacts(artifact_dir: str = ARTIFACT_DIR) -> dict[str, Any]:
         "full_calibrator": joblib.load(_artifact_path(artifact_dir, "full_calibrator.joblib")),
         "full_shap_explainer": joblib.load(_artifact_path(artifact_dir, "full_shap_explainer.joblib")),
         "full_builder": joblib.load(FULL_FEATURE_BUILDER_ARTIFACT_PATH),
+        "reduced_model": joblib.load(_artifact_path(artifact_dir, "reduced_model.joblib")),
+        "reduced_calibrator": joblib.load(_artifact_path(artifact_dir, "reduced_calibrator.joblib")),
+        "reduced_shap_explainer": joblib.load(_artifact_path(artifact_dir, "reduced_shap_explainer.joblib")),
+        "reduced_builder": joblib.load(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH),
     }
 
 
@@ -341,6 +348,10 @@ def _fit_full_builder_from_flattened(train_df: pd.DataFrame):
     return builder
 
 
+def _fit_reduced_builder_from_application(train_df: pd.DataFrame):
+    return fit_reduced_builder(train_df)
+
+
 def _build_cached_full_frames(bundle: DatasetBundle) -> dict[str, pd.DataFrame]:
     assert bundle.raw_dir is not None, "Real FULL training requires raw_dir"
 
@@ -369,6 +380,12 @@ def _build_cached_full_frames(bundle: DatasetBundle) -> dict[str, pd.DataFrame]:
 
 
 def _build_features(bundle: DatasetBundle):
+    reduced_builder = _fit_reduced_builder_from_application(bundle.train)
+    train_reduced = build_reduced(bundle.train, reduced_builder)
+    val_model_reduced = build_reduced(bundle.val_model, reduced_builder)
+    val_policy_reduced = build_reduced(bundle.val_policy, reduced_builder)
+    test_reduced = build_reduced(bundle.test, reduced_builder)
+
     if bundle.uses_flattened_full_input:
         full_builder = _fit_full_builder_from_flattened(bundle.train)
         train_full = build_full(bundle.train, full_builder)
@@ -385,10 +402,15 @@ def _build_features(bundle: DatasetBundle):
 
     return {
         "full_builder": full_builder,
+        "reduced_builder": reduced_builder,
         "train_full": train_full,
         "val_model_full": val_model_full,
         "val_policy_full": val_policy_full,
         "test_full": test_full,
+        "train_reduced": train_reduced,
+        "val_model_reduced": val_model_reduced,
+        "val_policy_reduced": val_policy_reduced,
+        "test_reduced": test_reduced,
     }
 
 
@@ -490,7 +512,8 @@ def _collect_metrics(y_true: np.ndarray, calibrated_pd: np.ndarray) -> dict[str,
     }
 
 
-def _train_full_model(
+def _train_tier_model(
+    tier: str,
     train_X: pd.DataFrame,
     train_y: np.ndarray,
     val_model_X: pd.DataFrame,
@@ -501,6 +524,7 @@ def _train_full_model(
     test_y: np.ndarray,
     artifact_dir: str,
 ) -> dict[str, Any]:
+    tier_prefix = tier.lower()
     pos = int(train_y.sum())
     neg = int(len(train_y) - pos)
     scale_pos_weight = float(neg / max(pos, 1))
@@ -534,9 +558,12 @@ def _train_full_model(
     test_calibrated_pd = calibrator.predict(test_raw_pd)
     metrics = _collect_metrics(test_y, test_calibrated_pd)
 
-    joblib.dump(best_model, _artifact_path(artifact_dir, "full_model.joblib"))
-    joblib.dump(calibrator, _artifact_path(artifact_dir, "full_calibrator.joblib"))
-    joblib.dump(TreeShapExplainer(best_model), _artifact_path(artifact_dir, "full_shap_explainer.joblib"))
+    joblib.dump(best_model, _artifact_path(artifact_dir, f"{tier_prefix}_model.joblib"))
+    joblib.dump(calibrator, _artifact_path(artifact_dir, f"{tier_prefix}_calibrator.joblib"))
+    joblib.dump(
+        TreeShapExplainer(best_model),
+        _artifact_path(artifact_dir, f"{tier_prefix}_shap_explainer.joblib"),
+    )
 
     return {
         "model": best_model,
@@ -575,7 +602,8 @@ def train_models(
     y_val_policy = bundle.val_policy["TARGET"].to_numpy(dtype=int)
     y_test = bundle.test["TARGET"].to_numpy(dtype=int)
 
-    full_result = _train_full_model(
+    full_result = _train_tier_model(
+        "FULL",
         features["train_full"],
         y_train,
         features["val_model_full"],
@@ -583,6 +611,18 @@ def train_models(
         features["val_policy_full"],
         y_val_policy,
         features["test_full"],
+        y_test,
+        artifact_dir,
+    )
+    reduced_result = _train_tier_model(
+        "REDUCED",
+        features["train_reduced"],
+        y_train,
+        features["val_model_reduced"],
+        y_val_model,
+        features["val_policy_reduced"],
+        y_val_policy,
+        features["test_reduced"],
         y_test,
         artifact_dir,
     )
@@ -600,6 +640,33 @@ def train_models(
         },
         "model_version": MODEL_VERSIONS["full"],
         "metrics": full_result["metrics"],
+        "reduced_metrics": reduced_result["metrics"],
+        "full_model_version": MODEL_VERSIONS["full"],
+        "reduced_model_version": MODEL_VERSIONS["reduced"],
+        "tiers": {
+            "FULL": {
+                "model_version": MODEL_VERSIONS["full"],
+                "metrics": full_result["metrics"],
+                "selection": {
+                    "candidate": full_result["selected_candidate"],
+                    "val_model_roc_auc": full_result["val_model_roc_auc"],
+                    "params": full_result["selected_params"],
+                    "calibrator": full_result["selected_calibrator"],
+                    "val_policy_calibration_metrics": full_result["val_policy_calibration_metrics"],
+                },
+            },
+            "REDUCED": {
+                "model_version": MODEL_VERSIONS["reduced"],
+                "metrics": reduced_result["metrics"],
+                "selection": {
+                    "candidate": reduced_result["selected_candidate"],
+                    "val_model_roc_auc": reduced_result["val_model_roc_auc"],
+                    "params": reduced_result["selected_params"],
+                    "calibrator": reduced_result["selected_calibrator"],
+                    "val_policy_calibration_metrics": reduced_result["val_policy_calibration_metrics"],
+                },
+            },
+        },
         "selection": {
             "candidate": full_result["selected_candidate"],
             "val_model_roc_auc": full_result["val_model_roc_auc"],
@@ -609,15 +676,20 @@ def train_models(
         },
         "artifacts": {
             "full_builder": FULL_FEATURE_BUILDER_ARTIFACT_PATH,
+            "reduced_builder": REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
             "full_model": _artifact_path(artifact_dir, "full_model.joblib"),
             "full_calibrator": _artifact_path(artifact_dir, "full_calibrator.joblib"),
             "full_shap_explainer": _artifact_path(artifact_dir, "full_shap_explainer.joblib"),
+            "reduced_model": _artifact_path(artifact_dir, "reduced_model.joblib"),
+            "reduced_calibrator": _artifact_path(artifact_dir, "reduced_calibrator.joblib"),
+            "reduced_shap_explainer": _artifact_path(artifact_dir, "reduced_shap_explainer.joblib"),
             "fairness_result": _artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME),
         },
         "notes": [
             "Synthetic fallback is used when local processed/raw data artifacts are unavailable.",
             "Validation model split is used for candidate selection; validation policy split is used for probability calibration.",
             "Accuracy is measured on the held-out test split using the DECLINE threshold as the positive-class cutoff.",
+            "Both FULL and REDUCED artifact stacks are trained and persisted in the same run.",
         ],
     }
     report_path = _write_reproducibility_report(artifact_dir, report)
@@ -638,4 +710,5 @@ if __name__ == "__main__":
     report = train_models()
     print(f"Training mode: {report['mode']}")
     print(_format_metric_line("FULL", report["metrics"]))
+    print(_format_metric_line("REDUCED", report["reduced_metrics"]))
     print(f"Report written to: {report['report_path']}")
