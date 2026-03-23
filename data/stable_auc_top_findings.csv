@@ -1,0 +1,25 @@
+section,rank,feature,metric,value,detail
+split_target_rates,1,train,default_rate,0.09068539776484233,
+split_target_rates,2,val_model,default_rate,0.07684302949497578,
+split_target_rates,3,val_policy,default_rate,0.06516861240284869,
+split_target_rates,4,test,default_rate,0.060582410614116386,
+missingness_lift,1,AMT_REQ_CREDIT_BUREAU_DAY,target_gap,0.026071688076458654,missing_rate=0.152
+missingness_lift,2,AMT_REQ_CREDIT_BUREAU_YEAR,target_gap,0.026071688076458654,missing_rate=0.152
+missingness_lift,3,AMT_REQ_CREDIT_BUREAU_QRT,target_gap,0.026071688076458654,missing_rate=0.152
+missingness_lift,4,AMT_REQ_CREDIT_BUREAU_WEEK,target_gap,0.026071688076458654,missing_rate=0.152
+missingness_lift,5,AMT_REQ_CREDIT_BUREAU_HOUR,target_gap,0.026071688076458654,missing_rate=0.152
+stable_numeric_auc,1,EXT_SOURCE_MEAN,test_auc,0.7128429257812527,auc_drop=+0.000
+stable_numeric_auc,2,EXT_SOURCE_AGE_INTERACTION,test_auc,0.6999571289754067,auc_drop=-0.016
+stable_numeric_auc,3,EXT_SOURCE_3,test_auc,0.6725471040937001,auc_drop=+0.005
+stable_numeric_auc,4,EXT_SOURCE_1,test_auc,0.66745100994217,auc_drop=-0.007
+stable_numeric_auc,5,EXT_SOURCE_EMPLOYMENT_INTERACTION,test_auc,0.640143501598709,auc_drop=+0.001
+categorical_lift,1,OCCUPATION_TYPE,target_rate_gap,0.12272641656225175,Low-skill Laborers vs Accountants
+categorical_lift,2,ORGANIZATION_TYPE,target_rate_gap,0.12228076019084524,Transport: type 3 vs University
+categorical_lift,3,NAME_EDUCATION_TYPE,target_rate_gap,0.07165144533948525,Lower secondary vs Higher education
+categorical_lift,4,NAME_HOUSING_TYPE,target_rate_gap,0.059753334876786024,Rented apartment vs Office apartment
+categorical_lift,5,NAME_TYPE_SUITE,target_rate_gap,0.05581807839255401,Other_B vs nan
+adversarial_drift,1,ORGANIZATION_TYPE_XNA,importance,0.2564465403556824,
+adversarial_drift,2,DAYS_EMPLOYED_ANOM,importance,0.15158918499946594,
+adversarial_drift,3,NAME_CONTRACT_TYPE_Cash loans,importance,0.07627835124731064,
+adversarial_drift,4,DAYS_EMPLOYED,importance,0.07454492151737213,
+adversarial_drift,5,AMT_REQ_CREDIT_BUREAU_MON,importance,0.07172174751758575,

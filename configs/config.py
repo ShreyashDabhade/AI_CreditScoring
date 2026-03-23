@@ -1,58 +1,29 @@
-"""
-MasterMind — Shared Configuration
-All project-wide constants. Every module imports from here.
-"""
+"""Compatibility loader for the shared project configuration module."""
 
-import os
+from __future__ import annotations
 
-# ─── Reproducibility ─────────────────────────────────────
-RANDOM_STATE: int = 42
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
-# ─── Data Split Fractions ────────────────────────────────
-TRAIN_FRAC: float = 0.60
-VAL_MODEL_FRAC: float = 0.10
-VAL_POLICY_FRAC: float = 0.10
-TEST_FRAC: float = 0.20
+_ARTIFACT_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1] / "artifacts" / "configs" / "config.py"
+)
 
-# ─── Feature Engineering ─────────────────────────────────
-RARE_CATEGORY_MIN_COUNT: int = 500
-MISSING_RATE_THRESHOLD: float = 0.05
+if not _ARTIFACT_CONFIG_PATH.exists():
+    raise ModuleNotFoundError(
+        f"Could not locate shared configuration at {_ARTIFACT_CONFIG_PATH}"
+    )
 
-# ─── Decision Policy ─────────────────────────────────────
-APPROVE_THRESHOLD: float = 0.15
-DECLINE_THRESHOLD: float = 0.35
+_spec = spec_from_file_location("_artifact_shared_config", _ARTIFACT_CONFIG_PATH)
+if _spec is None or _spec.loader is None:
+    raise ModuleNotFoundError(
+        f"Could not load shared configuration from {_ARTIFACT_CONFIG_PATH}"
+    )
 
-# ─── Fairness Audit ──────────────────────────────────────
-FAIRNESS_MIN_N: int = 200
-FAIRNESS_MIN_DEFAULTS: int = 20
+_module = module_from_spec(_spec)
+_spec.loader.exec_module(_module)
 
-# ─── Paths ───────────────────────────────────────────────
-DATA_DIR: str = os.environ.get(
-    "DATA_PROCESSED_DIR", "data/processed/")
-ARTIFACT_DIR: str = os.environ.get(
-    "ARTIFACT_DIR", "artifacts/")
+__all__ = [name for name in dir(_module) if not name.startswith("_")]
 
-# ─── Versioning ──────────────────────────────────────────
-FAIRNESS_AUDIT_VERSION: str = "proxy_audit_2026Q1_v1.0"
-MODEL_VERSIONS: dict = {
-    "full": "full_v2.1.0",
-    "reduced": "reduced_v2.1.0",
-}
-
-# ─── API Section Requirements ────────────────────────────
-FULL_REQUIRED_SECTIONS: set[str] = {
-    "application", "bureau_agg", "previous_agg",
-    "installments_agg", "pos_cash_agg", "credit_card_agg",
-}
-
-
-# ─── Self-verification ──────────────────────────────────
-if __name__ == "__main__":
-    import importlib
-    cfg = importlib.import_module("configs.config")
-    assert cfg.RANDOM_STATE == 42
-    assert cfg.APPROVE_THRESHOLD == 0.15
-    assert cfg.DECLINE_THRESHOLD == 0.35
-    assert cfg.FAIRNESS_AUDIT_VERSION == "proxy_audit_2026Q1_v1.0"
-    assert "full" in cfg.MODEL_VERSIONS
-    print("configs/config.py verified ✓")
+for _name in __all__:
+    globals()[_name] = getattr(_module, _name)

@@ -1,1 +1,2 @@
-# MasterMind configs package
+"""Compatibility package for shared project configuration."""
+

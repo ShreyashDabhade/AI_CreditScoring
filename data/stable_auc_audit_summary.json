@@ -1,0 +1,80 @@
+{
+  "scope": "hybrid",
+  "optimization_goal": "stable_auc",
+  "baseline": {
+    "train_auc": 0.7705177108692667,
+    "val_model_auc": 0.7438480797886204,
+    "val_policy_auc": 0.7480960002282977,
+    "test_auc": 0.7425471706693636,
+    "adversarial_auc": 0.8983537935634001
+  },
+  "accepted_deployment_bundles": [],
+  "rejected_or_deferred_bundles": [
+    "baseline",
+    "stable_application_bundle",
+    "housing_bundle",
+    "drift_control_bundle",
+    "raw_table_bundle"
+  ],
+  "top_drift_drivers": [
+    "ORGANIZATION_TYPE_XNA",
+    "DAYS_EMPLOYED_ANOM",
+    "NAME_CONTRACT_TYPE_Cash loans",
+    "DAYS_EMPLOYED",
+    "AMT_REQ_CREDIT_BUREAU_MON",
+    "AMT_REQ_CREDIT_BUREAU_QRT",
+    "NAME_CONTRACT_TYPE_Revolving loans",
+    "AMT_REQ_CREDIT_BUREAU_WEEK",
+    "AMT_ANNUITY",
+    "AMT_CREDIT"
+  ],
+  "top_stable_numeric_features": [
+    "EXT_SOURCE_MEAN",
+    "EXT_SOURCE_AGE_INTERACTION",
+    "EXT_SOURCE_3",
+    "EXT_SOURCE_1",
+    "EXT_SOURCE_EMPLOYMENT_INTERACTION",
+    "EXT_SOURCE_2",
+    "EXT_SOURCE_BURDEN_RATIO",
+    "EXT_SOURCE_CREDIT_RATIO",
+    "DAYS_EMPLOYED",
+    "EMPLOYMENT_YEARS"
+  ],
+  "top_categorical_separators": [
+    "OCCUPATION_TYPE",
+    "ORGANIZATION_TYPE",
+    "NAME_EDUCATION_TYPE",
+    "NAME_HOUSING_TYPE",
+    "NAME_TYPE_SUITE",
+    "WALLSMATERIAL_MODE",
+    "NAME_FAMILY_STATUS",
+    "NAME_INCOME_TYPE",
+    "HOUSETYPE_MODE",
+    "CODE_GENDER"
+  ],
+  "recommended_runtime_bundle_profile": {
+    "MODEL_APPLICATION_BUNDLES": "",
+    "MODEL_DRIFT_CONTROL_BUNDLES": "",
+    "MODEL_FULL_BUNDLES": ""
+  },
+  "raw_phase2_status": {
+    "status": "skipped",
+    "missing_tables": [
+      "bureau.csv",
+      "previous_application.csv",
+      "installments_payments.csv",
+      "POS_CASH_balance.csv",
+      "credit_card_balance.csv"
+    ],
+    "message": "Raw child tables are not available locally yet; phase 2 recency-window audit is deferred."
+  },
+  "plot_paths": {
+    "split_target_rates": "notebooks/eda_plots/stable_auc_split_target_rate_drift.png",
+    "missingness_lift": "notebooks/eda_plots/stable_auc_missingness_target_lift_top15.png",
+    "numeric_auc_stability": "notebooks/eda_plots/stable_auc_numeric_auc_stability_top15.png",
+    "categorical_lift": "notebooks/eda_plots/stable_auc_categorical_lift_top15.png",
+    "adversarial_drift": "notebooks/eda_plots/stable_auc_adversarial_drift_top15.png",
+    "candidate_interactions": "notebooks/eda_plots/stable_auc_candidate_interaction_scan.png",
+    "bundle_comparison": "notebooks/eda_plots/stable_auc_bundle_comparison.png"
+  }
+}

@@ -86,5 +86,11 @@
     "val_model": 30751,
     "val_policy": 30751,
     "test": 61503
+  },
+  "split_default_rates": {
+    "train": 0.0907,
+    "val_model": 0.0768,
+    "val_policy": 0.0652,
+    "test": 0.0606
   }
 }

@@ -60,16 +60,41 @@ APPLICATION_REQUIRED_INPUT_COLS = NUMERIC_RAW_COLS + CATEGORICAL_MODEL_COLS + [
 ]
 ENGINEERED_APP_FEATURE_COLS = [
     "AGE_YEARS",
+    "EMPLOYMENT_YEARS",
+    "REGISTRATION_YEARS",
+    "ID_PUBLISH_YEARS",
+    "PHONE_CHANGE_YEARS",
     "CREDIT_INCOME_RATIO",
     "ANNUITY_INCOME_RATIO",
     "GOODS_CREDIT_RATIO",
     "CREDIT_TERM_RATIO",
     "EMPLOYED_BIRTH_RATIO",
+    "REGISTRATION_BIRTH_RATIO",
+    "PHONE_CHANGE_BIRTH_RATIO",
     "ID_PUBLISH_REG_RATIO",
+    "INCOME_PER_FAM_MEMBER",
+    "CREDIT_PER_FAM_MEMBER",
+    "ANNUITY_CREDIT_DIFF",
+    "GOODS_CREDIT_DIFF",
     "EXT_SOURCE_MEAN",
     "EXT_SOURCE_STD",
+    "EXT_SOURCE_MIN",
+    "EXT_SOURCE_MAX",
+    "EXT_SOURCE_COUNT",
+    "EXT_SOURCE_AGE_INTERACTION",
+    "EXT_SOURCE_EMPLOYMENT_INTERACTION",
+    "EXT_SOURCE_BURDEN_RATIO",
+    "EXT_SOURCE_CREDIT_RATIO",
     "SOCIAL_CIRCLE_SUM",
+    "SOCIAL_CIRCLE_DEF_RATIO",
     "BUREAU_REQUEST_SUM",
+    "BUREAU_REQUEST_MAX",
+    "APPLICATION_MISSING_COUNT",
+    "HOUSING_MISSING_COUNT",
+    "LOG_AMT_CREDIT",
+    "LOG_AMT_ANNUITY",
+    "LOG_AMT_GOODS_PRICE",
+    "LOG_AMT_INCOME_TOTAL_CAPPED",
     "DAYS_EMPLOYED_ANOM",
 ]
 BUREAU_AGG_COLS = [
@@ -134,6 +159,53 @@ ALL_AGGREGATE_FEATURE_COLS = (
     + POS_CASH_AGG_COLS
     + CREDIT_CARD_AGG_COLS
 )
+DERIVED_FULL_FEATURE_COLS = [
+    "BUREAU_ACTIVE_SHARE",
+    "BUREAU_OVERDUE_TO_DEBT_RATIO",
+    "BUREAU_DEBT_INCOME_RATIO",
+    "PREV_CREDIT_INCOME_RATIO",
+    "PREV_GOODS_CREDIT_RATIO",
+    "INST_LATE_SHARE",
+    "INST_DPD_PER_RECORD",
+    "POS_DPD_COMPLETED_GAP",
+    "CC_BALANCE_LIMIT_RATIO",
+    "CC_ATM_DRAWING_SHARE",
+    "CC_DRAWING_INCOME_RATIO",
+    "TOTAL_OBLIGATION_TO_INCOME",
+    "CREDIT_TO_EXTERNAL_RISK",
+]
+APPLICATION_BUNDLE_FEATURES = {
+    "stable_application_bundle": [
+        "AGE_YEARS",
+        "EMPLOYMENT_YEARS",
+        "EXT_SOURCE_MEAN",
+        "EXT_SOURCE_STD",
+        "EXT_SOURCE_COUNT",
+        "EXT_SOURCE_AGE_INTERACTION",
+        "EXT_SOURCE_EMPLOYMENT_INTERACTION",
+        "EXT_SOURCE_BURDEN_RATIO",
+        "CREDIT_INCOME_RATIO",
+        "ANNUITY_INCOME_RATIO",
+        "INCOME_PER_FAM_MEMBER",
+        "CREDIT_PER_FAM_MEMBER",
+    ],
+    "housing_bundle": [
+        "HOUSING_MISSING_COUNT",
+    ],
+}
+DRIFT_CONTROL_DROP_COLUMNS = {
+    "drift_control_bundle": [
+        "DAYS_EMPLOYED_ANOM",
+    ],
+}
+FULL_BUNDLE_FEATURES = {
+    "raw_table_bundle": DERIVED_FULL_FEATURE_COLS,
+}
+# Conservative defaults from the current stable-AUC audit:
+# no deployment-eligible bundle cleared the acceptance gate yet.
+DEFAULT_ACCEPTED_APPLICATION_BUNDLES: tuple[str, ...] = ()
+DEFAULT_ACCEPTED_DRIFT_CONTROL_BUNDLES: tuple[str, ...] = ()
+DEFAULT_ACCEPTED_FULL_BUNDLES: tuple[str, ...] = ()
 FULL_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/full_feature_builder.joblib"
 REDUCED_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/reduced_feature_builder.joblib"
 PROCESSED_SPLIT_NAMES = ["train", "val_model", "val_policy", "test"]
@@ -213,24 +285,92 @@ def prefix_columns(df: pd.DataFrame, prefix: str, key: str = "SK_ID_CURR") -> pd
     return df.rename(columns={c: f"{prefix}_{c}".upper() for c in cols})
 
 
+def _bundle_names_from_env(env_var: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.environ.get(env_var)
+    if raw is None:
+        return default
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    return tuple(parts)
+
+
+def _resolve_application_bundle_names() -> tuple[str, ...]:
+    return _bundle_names_from_env("MODEL_APPLICATION_BUNDLES", DEFAULT_ACCEPTED_APPLICATION_BUNDLES)
+
+
+def _resolve_drift_control_bundle_names() -> tuple[str, ...]:
+    return _bundle_names_from_env("MODEL_DRIFT_CONTROL_BUNDLES", DEFAULT_ACCEPTED_DRIFT_CONTROL_BUNDLES)
+
+
+def _resolve_full_bundle_names() -> tuple[str, ...]:
+    return _bundle_names_from_env("MODEL_FULL_BUNDLES", DEFAULT_ACCEPTED_FULL_BUNDLES)
+
+
+def _apply_bundle_policy(df: pd.DataFrame, tier: str) -> pd.DataFrame:
+    df = df.copy()
+    keep_engineered: set[str] = set()
+    for bundle_name in _resolve_application_bundle_names():
+        keep_engineered.update(APPLICATION_BUNDLE_FEATURES.get(bundle_name, []))
+    drop_engineered = [c for c in ENGINEERED_APP_FEATURE_COLS if c in df.columns and c not in keep_engineered]
+    if drop_engineered:
+        df = df.drop(columns=drop_engineered)
+
+    if tier.upper() == "FULL":
+        keep_full: set[str] = set()
+        for bundle_name in _resolve_full_bundle_names():
+            keep_full.update(FULL_BUNDLE_FEATURES.get(bundle_name, []))
+        drop_full = [c for c in DERIVED_FULL_FEATURE_COLS if c in df.columns and c not in keep_full]
+        if drop_full:
+            df = df.drop(columns=drop_full)
+
+    drop_raw: set[str] = set()
+    for bundle_name in _resolve_drift_control_bundle_names():
+        drop_raw.update(DRIFT_CONTROL_DROP_COLUMNS.get(bundle_name, []))
+    if drop_raw:
+        present = [c for c in drop_raw if c in df.columns]
+        if present:
+            df = df.drop(columns=present)
+    return df
+
+
 def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     assert "AMT_INCOME_TOTAL_CAPPED" in df.columns, "AMT_INCOME_TOTAL_CAPPED missing - Module 1 not applied"
     assert "DAYS_EMPLOYED_ANOM" in df.columns, "DAYS_EMPLOYED_ANOM missing - Module 1 Trap A not applied"
     df["AGE_YEARS"] = -df["DAYS_BIRTH"] / 365
+    df["EMPLOYMENT_YEARS"] = -df["DAYS_EMPLOYED"] / 365
+    df["REGISTRATION_YEARS"] = -df["DAYS_REGISTRATION"] / 365
+    df["ID_PUBLISH_YEARS"] = -df["DAYS_ID_PUBLISH"] / 365
+    df["PHONE_CHANGE_YEARS"] = -df["DAYS_LAST_PHONE_CHANGE"] / 365
     df["CREDIT_INCOME_RATIO"] = safe_div(df["AMT_CREDIT"], df["AMT_INCOME_TOTAL_CAPPED"])
     df["ANNUITY_INCOME_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_INCOME_TOTAL_CAPPED"])
     df["GOODS_CREDIT_RATIO"] = safe_div(df["AMT_GOODS_PRICE"], df["AMT_CREDIT"])
     df["CREDIT_TERM_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_CREDIT"])
     df["EMPLOYED_BIRTH_RATIO"] = safe_div(df["DAYS_EMPLOYED"], df["DAYS_BIRTH"])
+    df["REGISTRATION_BIRTH_RATIO"] = safe_div(df["DAYS_REGISTRATION"], df["DAYS_BIRTH"])
+    df["PHONE_CHANGE_BIRTH_RATIO"] = safe_div(df["DAYS_LAST_PHONE_CHANGE"], df["DAYS_BIRTH"])
     df["ID_PUBLISH_REG_RATIO"] = safe_div(df["DAYS_ID_PUBLISH"], df["DAYS_REGISTRATION"])
+    df["INCOME_PER_FAM_MEMBER"] = safe_div(df["AMT_INCOME_TOTAL_CAPPED"], df["CNT_FAM_MEMBERS"])
+    df["CREDIT_PER_FAM_MEMBER"] = safe_div(df["AMT_CREDIT"], df["CNT_FAM_MEMBERS"])
+    df["ANNUITY_CREDIT_DIFF"] = df["AMT_CREDIT"] - df["AMT_ANNUITY"]
+    df["GOODS_CREDIT_DIFF"] = df["AMT_GOODS_PRICE"] - df["AMT_CREDIT"]
     df["EXT_SOURCE_MEAN"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].mean(axis=1)
     df["EXT_SOURCE_STD"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].std(axis=1)
+    df["EXT_SOURCE_MIN"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].min(axis=1)
+    df["EXT_SOURCE_MAX"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].max(axis=1)
+    df["EXT_SOURCE_COUNT"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].notna().sum(axis=1)
+    df["EXT_SOURCE_AGE_INTERACTION"] = df["EXT_SOURCE_MEAN"] * df["AGE_YEARS"]
+    df["EXT_SOURCE_EMPLOYMENT_INTERACTION"] = df["EXT_SOURCE_MEAN"] * df["EMPLOYMENT_YEARS"]
+    df["EXT_SOURCE_BURDEN_RATIO"] = safe_div(df["EXT_SOURCE_MEAN"], df["ANNUITY_INCOME_RATIO"])
+    df["EXT_SOURCE_CREDIT_RATIO"] = safe_div(df["EXT_SOURCE_MEAN"], df["CREDIT_INCOME_RATIO"])
     df["SOCIAL_CIRCLE_SUM"] = (
         df["OBS_30_CNT_SOCIAL_CIRCLE"].fillna(0)
         + df["DEF_30_CNT_SOCIAL_CIRCLE"].fillna(0)
         + df["OBS_60_CNT_SOCIAL_CIRCLE"].fillna(0)
         + df["DEF_60_CNT_SOCIAL_CIRCLE"].fillna(0)
+    )
+    df["SOCIAL_CIRCLE_DEF_RATIO"] = safe_div(
+        df["DEF_30_CNT_SOCIAL_CIRCLE"].fillna(0) + df["DEF_60_CNT_SOCIAL_CIRCLE"].fillna(0),
+        df["SOCIAL_CIRCLE_SUM"],
     )
     req_cols = [
         "AMT_REQ_CREDIT_BUREAU_HOUR",
@@ -241,6 +381,48 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
         "AMT_REQ_CREDIT_BUREAU_YEAR",
     ]
     df["BUREAU_REQUEST_SUM"] = df[req_cols].fillna(0).sum(axis=1)
+    df["BUREAU_REQUEST_MAX"] = df[req_cols].max(axis=1)
+    housing_cols = [c for c in df.columns if any(token in c for token in ("APART", "BASEMENT", "YEARS_", "COMMONAREA", "ELEVATORS", "ENTRANCES", "FLOORS", "LAND", "LIVING", "NONLIVING", "HOUSETYPE", "WALLSMATERIAL", "EMERGENCYSTATE", "TOTALAREA", "FONDKAPREMONT"))]
+    df["APPLICATION_MISSING_COUNT"] = df.isna().sum(axis=1)
+    df["HOUSING_MISSING_COUNT"] = df[housing_cols].isna().sum(axis=1) if housing_cols else 0
+    for col in ["AMT_CREDIT", "AMT_ANNUITY", "AMT_GOODS_PRICE", "AMT_INCOME_TOTAL_CAPPED"]:
+        df[f"LOG_{col}"] = np.log1p(df[col].clip(lower=0))
+    return df
+
+
+def _engineer_full_aggregate_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["BUREAU_ACTIVE_SHARE"] = safe_div(df["BUREAU_ACTIVE_COUNT"], df["BUREAU_LOAN_COUNT"])
+    df["BUREAU_OVERDUE_TO_DEBT_RATIO"] = safe_div(
+        df["BUREAU_AMT_CREDIT_SUM_OVERDUE_SUM"],
+        df["BUREAU_AMT_CREDIT_SUM_DEBT_SUM"],
+    )
+    df["BUREAU_DEBT_INCOME_RATIO"] = safe_div(
+        df["BUREAU_AMT_CREDIT_SUM_DEBT_SUM"],
+        df["AMT_INCOME_TOTAL_CAPPED"],
+    )
+    df["PREV_CREDIT_INCOME_RATIO"] = safe_div(
+        df["PREV_AMT_CREDIT_MEAN"],
+        df["AMT_INCOME_TOTAL_CAPPED"],
+    )
+    df["PREV_GOODS_CREDIT_RATIO"] = safe_div(
+        df["PREV_AMT_GOODS_PRICE_MEAN"],
+        df["PREV_AMT_CREDIT_MEAN"],
+    )
+    df["INST_LATE_SHARE"] = safe_div(df["INST_LATE_COUNT"], df["INST_RECORD_COUNT"])
+    df["INST_DPD_PER_RECORD"] = safe_div(df["INST_DPD_MAX"], df["INST_RECORD_COUNT"])
+    df["POS_DPD_COMPLETED_GAP"] = df["POS_DPD_MAX"] - df["POS_COMPLETED_RATE"]
+    df["CC_BALANCE_LIMIT_RATIO"] = safe_div(df["CC_BALANCE_MEAN"], df["CC_LIMIT_MEAN"])
+    df["CC_ATM_DRAWING_SHARE"] = safe_div(df["CC_DRAWINGS_ATM_SUM"], df["CC_DRAWINGS_CURRENT_SUM"])
+    df["CC_DRAWING_INCOME_RATIO"] = safe_div(df["CC_DRAWINGS_CURRENT_SUM"], df["AMT_INCOME_TOTAL_CAPPED"])
+    df["TOTAL_OBLIGATION_TO_INCOME"] = safe_div(
+        df["BUREAU_AMT_CREDIT_SUM_DEBT_SUM"].fillna(0) + df["CC_BALANCE_MEAN"].fillna(0),
+        df["AMT_INCOME_TOTAL_CAPPED"],
+    )
+    df["CREDIT_TO_EXTERNAL_RISK"] = safe_div(
+        df["AMT_CREDIT"],
+        df["EXT_SOURCE_MEAN"],
+    )
     return df
 
 
@@ -448,6 +630,8 @@ def _build_pre_model_frame(
             if raw_dir is None:
                 raise ValueError("FULL transform requires flattened aggregate columns or raw_dir with SK_ID_CURR")
             base = _merge_full_aggregates(base, raw_dir)
+        base = _engineer_full_aggregate_features(base)
+    base = _apply_bundle_policy(base, tier)
     if "SK_ID_CURR" in base.columns:
         base = base.drop(columns=["SK_ID_CURR"])
     fairness_cols = [c for c in FAIRNESS_ONLY_COLS if c in base.columns]
@@ -706,9 +890,11 @@ if __name__ == "__main__":
             "DAYS_EMPLOYED": np.where(rng.random(10) > 0.2, rng.uniform(-5_000, -100, 10), np.nan),
             "DAYS_REGISTRATION": rng.uniform(-15_000, -500, 10),
             "DAYS_ID_PUBLISH": rng.uniform(-6_000, -100, 10),
+            "DAYS_LAST_PHONE_CHANGE": rng.uniform(-4_000, -50, 10),
             "EXT_SOURCE_1": rng.uniform(0, 1, 10),
             "EXT_SOURCE_2": rng.uniform(0, 1, 10),
             "EXT_SOURCE_3": rng.uniform(0, 1, 10),
+            "CNT_FAM_MEMBERS": rng.integers(1, 5, 10).astype(float),
             "OBS_30_CNT_SOCIAL_CIRCLE": rng.integers(0, 5, 10).astype(float),
             "DEF_30_CNT_SOCIAL_CIRCLE": rng.integers(0, 3, 10).astype(float),
             "OBS_60_CNT_SOCIAL_CIRCLE": rng.integers(0, 5, 10).astype(float),

@@ -8,6 +8,7 @@ This module handles:
 """
 
 import os
+import hashlib
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -16,6 +17,8 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import json
+
+PROCESSED_MANIFEST_FILENAME = "processed_artifact_manifest.json"
 
 
 # ================================
@@ -224,6 +227,165 @@ def build_adversarial_dataset(train_app: pd.DataFrame, test_app: pd.DataFrame):
     )
 
 
+def serialize_dataframe(df: pd.DataFrame, path: str) -> None:
+    with open(path, "wb") as f:
+        pickle.dump(df, f, protocol=4)
+    print(f"Saved {path}: {df.shape[0]} rows, {df.shape[1]} cols")
+
+
+def verify_dataframe(path: str, original_df: pd.DataFrame):
+    with open(path, "rb") as f:
+        reloaded = pickle.load(f)
+
+    assert isinstance(reloaded, pd.DataFrame), \
+        f"{path} did not reload as DataFrame"
+
+    assert reloaded.shape == original_df.shape, \
+        f"{path} shape mismatch after reload"
+
+
+def _schema_signature(df: pd.DataFrame) -> str:
+    payload = "|".join(f"{col}:{dtype}" for col, dtype in zip(df.columns, df.dtypes))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def build_processed_manifest(
+    train: pd.DataFrame,
+    val_model: pd.DataFrame,
+    val_policy: pd.DataFrame,
+    test: pd.DataFrame,
+    income_cap: float,
+) -> dict[str, object]:
+    lineage_seed = {
+        "train_rows": int(len(train)),
+        "val_model_rows": int(len(val_model)),
+        "val_policy_rows": int(len(val_policy)),
+        "test_rows": int(len(test)),
+        "income_cap": float(round(income_cap, 6)),
+        "columns": list(train.columns),
+    }
+    lineage_json = json.dumps(lineage_seed, sort_keys=True)
+    processed_manifest_id = hashlib.sha256(lineage_json.encode("utf-8")).hexdigest()[:16]
+    return {
+        "processed_manifest_id": processed_manifest_id,
+        "lineage": processed_manifest_id,
+        "split_row_counts": {
+            "train": int(len(train)),
+            "val_model": int(len(val_model)),
+            "val_policy": int(len(val_policy)),
+            "test": int(len(test)),
+        },
+        "schema_signature": _schema_signature(train),
+        "train_columns": list(train.columns),
+        "target_column": "TARGET",
+        "income_cap": float(income_cap),
+    }
+
+
+def _plot_target_rate_by_missingness(
+    df: pd.DataFrame,
+    output_path: str,
+    top_n: int = 10,
+) -> None:
+    missing_cols = df.isna().mean()
+    candidate_cols = missing_cols[missing_cols >= 0.05].sort_values(ascending=False).head(top_n).index.tolist()
+    if not candidate_cols:
+        return
+
+    rows: list[dict[str, object]] = []
+    for col in candidate_cols:
+        for is_missing, sub in df.groupby(df[col].isna()):
+            rows.append(
+                {
+                    "feature": col,
+                    "missing_state": "Missing" if is_missing else "Present",
+                    "default_rate": float(sub["TARGET"].mean()),
+                }
+            )
+    plot_df = pd.DataFrame(rows)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    sns.barplot(data=plot_df, x="feature", y="default_rate", hue="missing_state", ax=ax)
+    ax.set_title("Default rate by missingness state (top high-missing features)")
+    ax.set_xlabel("Feature")
+    ax.set_ylabel("Default rate")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
+def _plot_binned_target_rates(
+    df: pd.DataFrame,
+    output_path: str,
+    feature_names: list[str],
+) -> None:
+    fig, axes = plt.subplots(1, len(feature_names), figsize=(5 * len(feature_names), 4))
+    if len(feature_names) == 1:
+        axes = [axes]
+
+    for ax, feature in zip(axes, feature_names):
+        series = df[feature]
+        non_null = series.dropna()
+        if non_null.nunique() < 4:
+            ax.text(0.5, 0.5, f"{feature}\nnot enough variation", ha="center", va="center")
+            ax.axis("off")
+            continue
+        bins = pd.qcut(non_null, q=min(10, non_null.nunique()), duplicates="drop")
+        rate_df = (
+            pd.DataFrame({"bin": bins.astype(str), "TARGET": df.loc[non_null.index, "TARGET"].values})
+            .groupby("bin", sort=False)["TARGET"]
+            .mean()
+            .reset_index()
+        )
+        ax.plot(rate_df["bin"], rate_df["TARGET"], marker="o", color="#D85A30")
+        ax.set_title(f"{feature} vs default rate")
+        ax.set_ylabel("Default rate")
+        ax.tick_params(axis="x", rotation=60)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
+def _plot_split_target_rates(
+    splits: dict[str, pd.DataFrame],
+    output_path: str,
+) -> None:
+    split_df = pd.DataFrame(
+        {
+            "split": list(splits.keys()),
+            "default_rate": [float(frame["TARGET"].mean()) for frame in splits.values()],
+        }
+    )
+    fig, ax = plt.subplots(figsize=(6, 4))
+    sns.barplot(data=split_df, x="split", y="default_rate", palette=["#1D9E75", "#378ADD", "#D85A30", "#7F77DD"], ax=ax)
+    ax.set_title("Default rate by proxy-time split")
+    ax.set_ylabel("Default rate")
+    for idx, row in split_df.iterrows():
+        ax.text(idx, row["default_rate"], f"{row['default_rate']:.3f}", ha="center", va="bottom")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
+def _plot_numeric_target_correlations(
+    df: pd.DataFrame,
+    output_path: str,
+    top_n: int = 15,
+) -> None:
+    numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c != "TARGET"]
+    corr = df[numeric_cols + ["TARGET"]].corr(numeric_only=True)["TARGET"].drop("TARGET")
+    top = corr.abs().sort_values(ascending=False).head(top_n).sort_values()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.barh(top.index, corr.loc[top.index], color=["#1D9E75" if v < 0 else "#D85A30" for v in corr.loc[top.index]])
+    ax.set_title("Top numeric correlations with TARGET")
+    ax.set_xlabel("Pearson correlation")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+
+
 # ================================
 # MAIN EXECUTION BLOCK
 # ================================
@@ -350,15 +512,6 @@ if __name__ == "__main__":
     os.makedirs(DATA_PROCESSED_DIR, exist_ok=True)
 
     # ================================
-    # SERIALIZATION FUNCTION
-    # ================================
-
-    def serialize_dataframe(df: pd.DataFrame, path: str) -> None:
-        with open(path, "wb") as f:
-            pickle.dump(df, f, protocol=4)
-        print(f"Saved {path}: {df.shape[0]} rows, {df.shape[1]} cols")
-
-    # ================================
     # SAVE DATAFRAMES
     # ================================
 
@@ -383,20 +536,21 @@ if __name__ == "__main__":
     joblib.dump(income_cap, DATA_PROCESSED_DIR + "income_cap.joblib")
     print(f"income_cap = {income_cap:.2f} saved")
 
+    processed_manifest = build_processed_manifest(
+        train,
+        val_model,
+        val_policy,
+        test,
+        float(income_cap),
+    )
+    processed_manifest_path = os.path.join(DATA_PROCESSED_DIR, PROCESSED_MANIFEST_FILENAME)
+    with open(processed_manifest_path, "w", encoding="utf-8") as f:
+        json.dump(processed_manifest, f, indent=2)
+    print(f"{PROCESSED_MANIFEST_FILENAME} saved")
+
     # ================================
     # RELOAD VERIFICATION
     # ================================
-
-    def verify_dataframe(path: str, original_df: pd.DataFrame):
-        with open(path, "rb") as f:
-            reloaded = pickle.load(f)
-
-        assert isinstance(reloaded, pd.DataFrame), \
-            f"{path} did not reload as DataFrame"
-
-        assert reloaded.shape == original_df.shape, \
-            f"{path} shape mismatch after reload"
-
 
     verify_dataframe(DATA_PROCESSED_DIR + "train.pkl", train)
     verify_dataframe(DATA_PROCESSED_DIR + "val_model.pkl", val_model)
@@ -570,6 +724,29 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig(EDA_PLOTS_DIR + "income_outliers.png", dpi=150)
     plt.close()
+
+    _plot_target_rate_by_missingness(
+        train,
+        EDA_PLOTS_DIR + "missingness_default_rate.png",
+    )
+    _plot_binned_target_rates(
+        train,
+        EDA_PLOTS_DIR + "binned_default_rates.png",
+        ["EXT_SOURCE_2", "AMT_CREDIT", "AMT_INCOME_TOTAL_CAPPED"],
+    )
+    _plot_split_target_rates(
+        {
+            "train": train,
+            "val_model": val_model,
+            "val_policy": val_policy,
+            "test": test,
+        },
+        EDA_PLOTS_DIR + "split_default_rates.png",
+    )
+    _plot_numeric_target_correlations(
+        train,
+        EDA_PLOTS_DIR + "numeric_target_correlations.png",
+    )
     
     # Data Quality Report
     
@@ -597,6 +774,12 @@ if __name__ == "__main__":
             "val_model": int(len(val_model)),
             "val_policy": int(len(val_policy)),
             "test": int(len(test))
+        },
+        "split_default_rates": {
+            "train": float(round(train["TARGET"].mean(), 4)),
+            "val_model": float(round(val_model["TARGET"].mean(), 4)),
+            "val_policy": float(round(val_policy["TARGET"].mean(), 4)),
+            "test": float(round(test["TARGET"].mean(), 4)),
         }
     }
 
