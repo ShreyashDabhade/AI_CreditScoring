@@ -4,10 +4,10 @@ MasterMind is an explainable credit scoring system built on the Home Credit Defa
 
 ## Workflow
 
-The repaired workflow is:
+The current workflow is:
 
 1. Run Module 1 to create processed splits and `data/processed/processed_artifact_manifest.json`.
-2. Run Module 2 to persist lineage-validated FULL and REDUCED builders.
+2. Run Module 2 to persist the lineage-validated FULL builder.
 3. Run Module 3 to persist trained models, calibrators, SHAP explainers, and `artifacts/reproducibility_report.json`.
 4. Run Module 4 to persist `artifacts/model_fairness_audit_passed.joblib`.
 5. Start Module 5, which eagerly validates and loads those artifacts once at startup.
@@ -29,13 +29,10 @@ python -m pip install -r requirements.txt
 Module 5 requires these persisted artifacts before real-mode startup:
 
 - `data/processed/processed_artifact_manifest.json`
-- validated FULL and REDUCED builders loaded through `src/builder_artifacts.py`
+- validated FULL builder loaded through `src/builder_artifacts.py`
 - `artifacts/full_model.joblib`
-- `artifacts/reduced_model.joblib`
 - `artifacts/full_calibrator.joblib`
-- `artifacts/reduced_calibrator.joblib`
 - `artifacts/full_shap_explainer.joblib`
-- `artifacts/reduced_shap_explainer.joblib`
 - `artifacts/model_fairness_audit_passed.joblib`
 - optional `artifacts/reproducibility_report.json` for deployed metadata
 
@@ -84,13 +81,13 @@ Returns:
   "status": "ok",
   "model_version": "full_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1",
   "fairness_audit_passed": true,
-  "coverage_tiers_available": ["FULL", "REDUCED"]
+  "coverage_tiers_available": ["FULL"]
 }
 ```
 
 `POST /score`
 
-REDUCED example:
+FULL example:
 
 ```json
 {
@@ -128,15 +125,7 @@ REDUCED example:
     "ORGANIZATION_TYPE": "Business Entity Type 3",
     "WEEKDAY_APPR_PROCESS_START": "MONDAY",
     "DAYS_EMPLOYED_ANOM": 0
-  }
-}
-```
-
-FULL example:
-
-```json
-{
-  "application": { "...": "same application payload as REDUCED" },
+  },
   "bureau_agg": {
     "BUREAU_LOAN_COUNT": 2.0,
     "BUREAU_ACTIVE_COUNT": 1.0,
@@ -155,6 +144,8 @@ FULL example:
   "credit_card_agg": { "...": "all required credit card aggregate fields" }
 }
 ```
+
+Application-only starter payloads are not supported in the current API. `/score` expects the complete FULL payload.
 
 Success response:
 

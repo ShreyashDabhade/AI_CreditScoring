@@ -150,13 +150,9 @@ def _write_processed_manifest(processed_dir: Path) -> None:
 def _write_real_artifacts(artifact_dir: Path) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     full_builder = SavedBuilderFixture("FULL")
-    reduced_builder = SavedBuilderFixture("REDUCED")
     joblib.dump(SavedModelFixture(len(full_builder.columns)), artifact_dir / "full_model.joblib")
-    joblib.dump(SavedModelFixture(len(reduced_builder.columns)), artifact_dir / "reduced_model.joblib")
     joblib.dump(SavedCalibratorFixture(), artifact_dir / "full_calibrator.joblib")
-    joblib.dump(SavedCalibratorFixture(), artifact_dir / "reduced_calibrator.joblib")
     joblib.dump(SavedExplainerFixture(), artifact_dir / "full_shap_explainer.joblib")
-    joblib.dump(SavedExplainerFixture(), artifact_dir / "reduced_shap_explainer.joblib")
     joblib.dump(True, artifact_dir / "model_fairness_audit_passed.joblib")
     (artifact_dir / "reproducibility_report.json").write_text(
         json.dumps({"deployed_model_version": "deployed-full-2026.03"}),
@@ -201,7 +197,7 @@ def test_health_returns_required_fields():
         "coverage_tiers_available",
     }
     assert payload["status"] == "ok"
-    assert payload["coverage_tiers_available"] == ["FULL", "REDUCED"]
+    assert payload["coverage_tiers_available"] == ["FULL"]
 
 
 def test_demo_routes_render_frontend():
@@ -216,31 +212,14 @@ def test_demo_routes_render_frontend():
     assert "window.__MASTERMIND_DEMO__" in demo_response.get_data(as_text=True)
 
 
-def test_score_valid_reduced_returns_200_and_exact_schema():
+def test_score_application_only_returns_422():
     client = create_app(mock_mode=True).test_client()
 
     response = client.post("/score", json={"application": _make_application_payload()})
 
-    assert response.status_code == 200
+    assert response.status_code == 422
     payload = response.get_json()
-    assert set(payload) == {
-        "probability_of_default",
-        "decision",
-        "escalate",
-        "top_5_explanations",
-        "model_version",
-        "calibrated",
-        "model_fairness_audit_passed",
-        "fairness_audit_version",
-        "coverage_tier",
-    }
-    assert payload["coverage_tier"] == "REDUCED"
-    assert payload["model_version"].startswith("reduced_v")
-    assert payload["escalate"] == (payload["decision"] == "REVIEW")
-    assert len(payload["top_5_explanations"]) == 5
-    assert all(set(item) == {"feature", "reason"} for item in payload["top_5_explanations"])
-    assert all(isinstance(item["feature"], str) for item in payload["top_5_explanations"])
-    assert all(isinstance(item["reason"], str) for item in payload["top_5_explanations"])
+    assert payload["error_code"] == "starter_not_supported_in_mvp"
 
 
 def test_score_valid_full_returns_200():
@@ -334,13 +313,14 @@ def test_validate_payload_rejects_non_object_sections_and_non_scalar_values():
 
 
 def test_validate_payload_and_determine_coverage_tier_happy_paths():
-    reduced = {"application": _make_application_payload()}
     full = _make_full_payload()
 
-    assert determine_coverage_tier(reduced) == "REDUCED"
     assert determine_coverage_tier(full) == "FULL"
-    assert validate_payload(reduced) == (None, [])
     assert validate_payload(full) == (None, [])
+    assert validate_payload({"application": _make_application_payload()}) == (
+        "starter_not_supported_in_mvp",
+        [],
+    )
 
 
 def test_validate_payload_rejects_unknown_top_level_keys():
@@ -352,17 +332,21 @@ def test_validate_payload_rejects_unknown_top_level_keys():
     assert missing_fields == []
 
 
-def test_build_input_df_merges_full_and_reduced_correctly():
-    reduced_df = build_input_df({"application": _make_application_payload()}, "REDUCED")
+def test_build_input_df_builds_full_payload():
     full_df = build_input_df(_make_full_payload(), "FULL")
 
-    assert reduced_df.shape[0] == 1
     assert full_df.shape[0] == 1
-    assert "AMT_CREDIT" in reduced_df.columns
-    assert "BUREAU_LOAN_COUNT" not in reduced_df.columns
     assert "AMT_CREDIT" in full_df.columns
     assert "BUREAU_LOAN_COUNT" in full_df.columns
     assert "CC_RECORD_COUNT" in full_df.columns
+
+
+def test_build_input_df_rejects_non_full_tier():
+    try:
+        build_input_df(_make_full_payload(), "REDUCED")
+        assert False, "Expected non-FULL tier rejection"
+    except ValueError as exc:
+        assert "FULL" in str(exc)
 
 
 def test_build_input_df_rejects_duplicate_flattened_columns():
@@ -423,7 +407,6 @@ def test_strict_real_mode_fails_when_non_builder_artifact_is_missing(tmp_path, m
     def loader(**kwargs):
         return {
             "full_builder": SavedBuilderFixture("FULL"),
-            "reduced_builder": SavedBuilderFixture("REDUCED"),
         }
 
     _install_fake_builder_module(monkeypatch, loader)
@@ -448,7 +431,6 @@ def test_real_mode_health_prefers_reproducibility_report_metadata(tmp_path, monk
     def loader(**kwargs):
         return {
             "full_builder": SavedBuilderFixture("FULL"),
-            "reduced_builder": SavedBuilderFixture("REDUCED"),
         }
 
     _install_fake_builder_module(monkeypatch, loader)
@@ -467,10 +449,10 @@ def test_real_mode_health_prefers_reproducibility_report_metadata(tmp_path, monk
 def test_internal_error_path_returns_500():
     app = create_app(mock_mode=True)
     runtime = app.extensions["mastermind_runtime"]
-    app.extensions["mastermind_runtime"] = replace(runtime, reduced_model=ExplodingModel())
+    app.extensions["mastermind_runtime"] = replace(runtime, full_model=ExplodingModel())
     client = app.test_client()
 
-    response = client.post("/score", json={"application": _make_application_payload()})
+    response = client.post("/score", json=_make_full_payload())
 
     assert response.status_code == 500
     assert response.get_json() == {

@@ -1,7 +1,7 @@
 """Module 3 — Model Training.
 
-Trains FULL and REDUCED scoring models, calibrates probabilities, persists
-artifacts for Module 5, and writes a reproducibility report.
+Trains a FULL scoring model, calibrates probabilities, persists artifacts
+for Module 5, and writes a reproducibility report.
 
 If real processed/raw data is unavailable in the local clone, this module falls
 back to a deterministic synthetic dataset so the branch remains runnable.
@@ -11,8 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any
+
+if __package__ is None or __package__ == "":
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
 
 import joblib
 import numpy as np
@@ -33,7 +39,6 @@ from configs.config import (
 from src.feature_engineering import (
     ALL_AGGREGATE_FEATURE_COLS,
     FULL_FEATURE_BUILDER_ARTIFACT_PATH,
-    REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
     _agg_bureau,
     _agg_credit_card,
     _agg_installments,
@@ -42,11 +47,8 @@ from src.feature_engineering import (
     _build_pre_model_frame,
     _fit_builder_from_pre_model_frame,
     build_full,
-    build_reduced,
-    fit_full_builder,
-    fit_reduced_builder,
 )
-from src.models.runtime_support import TreeShapExplainer
+from src.models.runtime_support import LogisticProbabilityCalibrator, TreeShapExplainer
 
 REPRODUCIBILITY_REPORT_FILENAME = "reproducibility_report.json"
 FAIRNESS_RESULT_FILENAME = "model_fairness_audit_passed.joblib"
@@ -85,11 +87,9 @@ def _artifact_path(artifact_dir: str, filename: str) -> str:
 def load_artifacts(artifact_dir: str = ARTIFACT_DIR) -> dict[str, Any]:
     return {
         "full_model": joblib.load(_artifact_path(artifact_dir, "full_model.joblib")),
-        "reduced_model": joblib.load(_artifact_path(artifact_dir, "reduced_model.joblib")),
         "full_calibrator": joblib.load(_artifact_path(artifact_dir, "full_calibrator.joblib")),
-        "reduced_calibrator": joblib.load(_artifact_path(artifact_dir, "reduced_calibrator.joblib")),
         "full_shap_explainer": joblib.load(_artifact_path(artifact_dir, "full_shap_explainer.joblib")),
-        "reduced_shap_explainer": joblib.load(_artifact_path(artifact_dir, "reduced_shap_explainer.joblib")),
+        "full_builder": joblib.load(FULL_FEATURE_BUILDER_ARTIFACT_PATH),
     }
 
 
@@ -369,7 +369,6 @@ def _build_cached_full_frames(bundle: DatasetBundle) -> dict[str, pd.DataFrame]:
 
 
 def _build_features(bundle: DatasetBundle):
-    reduced_builder = fit_reduced_builder(bundle.train)
     if bundle.uses_flattened_full_input:
         full_builder = _fit_full_builder_from_flattened(bundle.train)
         train_full = build_full(bundle.train, full_builder)
@@ -384,26 +383,16 @@ def _build_features(bundle: DatasetBundle):
         val_policy_full = build_full(full_frames["val_policy"], full_builder)
         test_full = build_full(full_frames["test"], full_builder)
 
-    train_reduced = build_reduced(bundle.train, reduced_builder)
-    val_model_reduced = build_reduced(bundle.val_model, reduced_builder)
-    val_policy_reduced = build_reduced(bundle.val_policy, reduced_builder)
-    test_reduced = build_reduced(bundle.test, reduced_builder)
-
     return {
         "full_builder": full_builder,
-        "reduced_builder": reduced_builder,
         "train_full": train_full,
         "val_model_full": val_model_full,
         "val_policy_full": val_policy_full,
         "test_full": test_full,
-        "train_reduced": train_reduced,
-        "val_model_reduced": val_model_reduced,
-        "val_policy_reduced": val_policy_reduced,
-        "test_reduced": test_reduced,
     }
 
 
-def _candidate_model_params(tier_name: str, scale_pos_weight: float) -> list[tuple[str, dict[str, Any]]]:
+def _candidate_model_params(scale_pos_weight: float) -> list[tuple[str, dict[str, Any]]]:
     baseline = {
         "n_estimators": 160,
         "max_depth": 4,
@@ -425,7 +414,7 @@ def _candidate_model_params(tier_name: str, scale_pos_weight: float) -> list[tup
     }
     tuned_b = {
         "n_estimators": 350,
-        "max_depth": 5 if tier_name.lower() == "reduced" else 4,
+        "max_depth": 4,
         "learning_rate": 0.04,
         "subsample": 0.85,
         "colsample_bytree": 0.75,
@@ -433,10 +422,21 @@ def _candidate_model_params(tier_name: str, scale_pos_weight: float) -> list[tup
         "min_child_weight": 8.0,
         "scale_pos_weight": scale_pos_weight,
     }
+    tuned_c = {
+        "n_estimators": 650,
+        "max_depth": 3,
+        "learning_rate": 0.02,
+        "subsample": 0.8,
+        "colsample_bytree": 0.7,
+        "reg_lambda": 4.0,
+        "min_child_weight": 10.0,
+        "scale_pos_weight": scale_pos_weight,
+    }
     return [
         ("baseline", baseline),
         ("tuned_a", tuned_a),
         ("tuned_b", tuned_b),
+        ("tuned_c", tuned_c),
     ]
 
 
@@ -455,6 +455,31 @@ def _fit_calibrator(y_true: np.ndarray, raw_pd: np.ndarray) -> IsotonicRegressio
     return calibrator
 
 
+def _select_calibrator(y_true: np.ndarray, raw_pd: np.ndarray) -> tuple[Any, str, dict[str, float]]:
+    isotonic = _fit_calibrator(y_true, raw_pd)
+    logistic = LogisticProbabilityCalibrator().fit(raw_pd, y_true)
+
+    iso_pred = isotonic.predict(raw_pd)
+    log_pred = logistic.predict(raw_pd)
+
+    iso_metrics = {
+        "roc_auc": float(roc_auc_score(y_true, iso_pred)),
+        "brier_score": float(brier_score_loss(y_true, iso_pred)),
+    }
+    log_metrics = {
+        "roc_auc": float(roc_auc_score(y_true, log_pred)),
+        "brier_score": float(brier_score_loss(y_true, log_pred)),
+    }
+
+    if log_metrics["roc_auc"] > iso_metrics["roc_auc"]:
+        return logistic, "logistic", log_metrics
+    if log_metrics["roc_auc"] < iso_metrics["roc_auc"]:
+        return isotonic, "isotonic", iso_metrics
+    if log_metrics["brier_score"] <= iso_metrics["brier_score"]:
+        return logistic, "logistic", log_metrics
+    return isotonic, "isotonic", iso_metrics
+
+
 def _collect_metrics(y_true: np.ndarray, calibrated_pd: np.ndarray) -> dict[str, float]:
     y_pred = (calibrated_pd >= DECLINE_THRESHOLD).astype(int)
     return {
@@ -465,8 +490,7 @@ def _collect_metrics(y_true: np.ndarray, calibrated_pd: np.ndarray) -> dict[str,
     }
 
 
-def _train_one_tier(
-    tier_name: str,
+def _train_full_model(
     train_X: pd.DataFrame,
     train_y: np.ndarray,
     val_model_X: pd.DataFrame,
@@ -486,7 +510,7 @@ def _train_one_tier(
     best_params: dict[str, Any] = {}
     best_val_auc = float("-inf")
 
-    for candidate_name, params in _candidate_model_params(tier_name, scale_pos_weight):
+    for candidate_name, params in _candidate_model_params(scale_pos_weight):
         model = _make_model(params)
         model.fit(
             train_X,
@@ -505,15 +529,14 @@ def _train_one_tier(
     assert best_model is not None
 
     val_policy_raw_pd = best_model.predict_proba(val_policy_X)[:, 1]
-    calibrator = _fit_calibrator(val_policy_y, val_policy_raw_pd)
+    calibrator, calibrator_name, calibrator_metrics = _select_calibrator(val_policy_y, val_policy_raw_pd)
     test_raw_pd = best_model.predict_proba(test_X)[:, 1]
     test_calibrated_pd = calibrator.predict(test_raw_pd)
     metrics = _collect_metrics(test_y, test_calibrated_pd)
 
-    prefix = tier_name.lower()
-    joblib.dump(best_model, _artifact_path(artifact_dir, f"{prefix}_model.joblib"))
-    joblib.dump(calibrator, _artifact_path(artifact_dir, f"{prefix}_calibrator.joblib"))
-    joblib.dump(TreeShapExplainer(best_model), _artifact_path(artifact_dir, f"{prefix}_shap_explainer.joblib"))
+    joblib.dump(best_model, _artifact_path(artifact_dir, "full_model.joblib"))
+    joblib.dump(calibrator, _artifact_path(artifact_dir, "full_calibrator.joblib"))
+    joblib.dump(TreeShapExplainer(best_model), _artifact_path(artifact_dir, "full_shap_explainer.joblib"))
 
     return {
         "model": best_model,
@@ -522,6 +545,8 @@ def _train_one_tier(
         "selected_candidate": best_name,
         "selected_params": best_params,
         "val_model_roc_auc": best_val_auc,
+        "selected_calibrator": calibrator_name,
+        "val_policy_calibration_metrics": calibrator_metrics,
     }
 
 
@@ -550,8 +575,7 @@ def train_models(
     y_val_policy = bundle.val_policy["TARGET"].to_numpy(dtype=int)
     y_test = bundle.test["TARGET"].to_numpy(dtype=int)
 
-    full_result = _train_one_tier(
-        "full",
+    full_result = _train_full_model(
         features["train_full"],
         y_train,
         features["val_model_full"],
@@ -559,18 +583,6 @@ def train_models(
         features["val_policy_full"],
         y_val_policy,
         features["test_full"],
-        y_test,
-        artifact_dir,
-    )
-    reduced_result = _train_one_tier(
-        "reduced",
-        features["train_reduced"],
-        y_train,
-        features["val_model_reduced"],
-        y_val_model,
-        features["val_policy_reduced"],
-        y_val_policy,
-        features["test_reduced"],
         y_test,
         artifact_dir,
     )
@@ -586,35 +598,20 @@ def train_models(
             "val_policy": int(len(bundle.val_policy)),
             "test": int(len(bundle.test)),
         },
-        "model_versions": {
-            "FULL": MODEL_VERSIONS["full"],
-            "REDUCED": MODEL_VERSIONS["reduced"],
-        },
-        "metrics": {
-            "FULL": full_result["metrics"],
-            "REDUCED": reduced_result["metrics"],
-        },
+        "model_version": MODEL_VERSIONS["full"],
+        "metrics": full_result["metrics"],
         "selection": {
-            "FULL": {
-                "candidate": full_result["selected_candidate"],
-                "val_model_roc_auc": full_result["val_model_roc_auc"],
-                "params": full_result["selected_params"],
-            },
-            "REDUCED": {
-                "candidate": reduced_result["selected_candidate"],
-                "val_model_roc_auc": reduced_result["val_model_roc_auc"],
-                "params": reduced_result["selected_params"],
-            },
+            "candidate": full_result["selected_candidate"],
+            "val_model_roc_auc": full_result["val_model_roc_auc"],
+            "params": full_result["selected_params"],
+            "calibrator": full_result["selected_calibrator"],
+            "val_policy_calibration_metrics": full_result["val_policy_calibration_metrics"],
         },
         "artifacts": {
             "full_builder": FULL_FEATURE_BUILDER_ARTIFACT_PATH,
-            "reduced_builder": REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
             "full_model": _artifact_path(artifact_dir, "full_model.joblib"),
-            "reduced_model": _artifact_path(artifact_dir, "reduced_model.joblib"),
             "full_calibrator": _artifact_path(artifact_dir, "full_calibrator.joblib"),
-            "reduced_calibrator": _artifact_path(artifact_dir, "reduced_calibrator.joblib"),
             "full_shap_explainer": _artifact_path(artifact_dir, "full_shap_explainer.joblib"),
-            "reduced_shap_explainer": _artifact_path(artifact_dir, "reduced_shap_explainer.joblib"),
             "fairness_result": _artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME),
         },
         "notes": [
@@ -640,6 +637,5 @@ def _format_metric_line(label: str, metrics: dict[str, float]) -> str:
 if __name__ == "__main__":
     report = train_models()
     print(f"Training mode: {report['mode']}")
-    print(_format_metric_line("FULL", report["metrics"]["FULL"]))
-    print(_format_metric_line("REDUCED", report["metrics"]["REDUCED"]))
+    print(_format_metric_line("FULL", report["metrics"]))
     print(f"Report written to: {report['report_path']}")

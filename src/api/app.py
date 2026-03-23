@@ -35,7 +35,7 @@ RUNTIME_EXTENSION_KEY = "mastermind_runtime"
 PROCESSED_MANIFEST_FILENAME = "processed_artifact_manifest.json"
 REPRODUCIBILITY_REPORT_FILENAME = "reproducibility_report.json"
 FAIRNESS_RESULT_FILENAME = "model_fairness_audit_passed.joblib"
-DEMO_DEFAULT_TIER = "REDUCED"
+DEMO_DEFAULT_TIER = "FULL"
 CATEGORICAL_APPLICATION_FIELDS = frozenset(
     {
         "NAME_CONTRACT_TYPE",
@@ -202,15 +202,10 @@ class ApiRuntime:
     processed_dir: str
     processed_manifest: Mapping[str, Any]
     full_builder: Any
-    reduced_builder: Any
     full_model: Any
-    reduced_model: Any
     full_calibrator: Any
-    reduced_calibrator: Any
     full_shap_explainer: Any
-    reduced_shap_explainer: Any
     model_fairness_audit_passed: bool
-    score_model_versions: Mapping[str, str]
     health_model_version: str
     reproducibility_report: Mapping[str, Any]
     mock_mode: bool
@@ -359,7 +354,7 @@ def create_app(
                 "status": "ok",
                 "model_version": loaded_runtime.health_model_version,
                 "fairness_audit_passed": loaded_runtime.model_fairness_audit_passed,
-                "coverage_tiers_available": ["FULL", "REDUCED"],
+                "coverage_tiers_available": ["FULL"],
             }
         )
 
@@ -450,7 +445,7 @@ def validate_payload(payload: dict) -> tuple[str | None, list[str]]:
 
 
 def determine_coverage_tier(payload: dict) -> str:
-    """Classify payloads as FULL or REDUCED based on top-level sections."""
+    """Classify payloads for the FULL-only API contract."""
 
     if not isinstance(payload, dict):
         raise ValueError("payload must be a dict")
@@ -458,11 +453,9 @@ def determine_coverage_tier(payload: dict) -> str:
         raise ValueError("application is required")
 
     top_keys = set(payload)
-    if top_keys == {"application"}:
-        return "REDUCED"
     if top_keys == set(FULL_SECTION_ORDER):
         return "FULL"
-    if top_keys.intersection(FULL_ONLY_SECTIONS):
+    if top_keys == {"application"} or top_keys.intersection(FULL_ONLY_SECTIONS):
         raise ValueError("partial full payload")
     raise ValueError("unsupported starter payload")
 
@@ -471,11 +464,11 @@ def build_input_df(payload: dict, tier: str) -> pd.DataFrame:
     """Flatten a valid request payload into a one-row DataFrame."""
 
     tier = tier.upper()
-    if tier not in {"FULL", "REDUCED"}:
-        raise ValueError("tier must be FULL or REDUCED")
+    if tier != "FULL":
+        raise ValueError("tier must be FULL")
 
     flattened: dict[str, Any] = {}
-    section_names = ("application",) if tier == "REDUCED" else FULL_SECTION_ORDER
+    section_names = FULL_SECTION_ORDER
 
     for section_name in section_names:
         section = payload.get(section_name)
@@ -503,10 +496,10 @@ def score_request(payload: dict, runtime: ApiRuntime, mock_mode: bool = False) -
 
     tier = determine_coverage_tier(payload)
     input_df = build_input_df(payload, tier)
-    builder = runtime.full_builder if tier == "FULL" else runtime.reduced_builder
-    model = runtime.full_model if tier == "FULL" else runtime.reduced_model
-    calibrator = runtime.full_calibrator if tier == "FULL" else runtime.reduced_calibrator
-    explainer = runtime.full_shap_explainer if tier == "FULL" else runtime.reduced_shap_explainer
+    builder = runtime.full_builder
+    model = runtime.full_model
+    calibrator = runtime.full_calibrator
+    explainer = runtime.full_shap_explainer
 
     features = _invoke_builder(builder, input_df)
     raw_pd = _predict_raw_pd(model, features)
@@ -523,7 +516,7 @@ def score_request(payload: dict, runtime: ApiRuntime, mock_mode: bool = False) -
         "decision": decision,
         "escalate": decision == "REVIEW",
         "top_5_explanations": explanations,
-        "model_version": runtime.score_model_versions[tier],
+        "model_version": runtime.health_model_version,
         "calibrated": True,
         "model_fairness_audit_passed": runtime.model_fairness_audit_passed,
         "fairness_audit_version": FAIRNESS_AUDIT_VERSION,
@@ -547,13 +540,9 @@ def _resolve_runtime_dirs(
 
 def _build_mock_runtime(artifact_dir: str, processed_dir: str) -> ApiRuntime:
     full_builder = _MockBuilder("FULL")
-    reduced_builder = _MockBuilder("REDUCED")
     full_model = _MockModel(len(full_builder.encoded_columns_))
-    reduced_model = _MockModel(len(reduced_builder.encoded_columns_))
     full_calibrator = _MockCalibrator()
-    reduced_calibrator = _MockCalibrator()
     full_explainer = _MockExplainer()
-    reduced_explainer = _MockExplainer()
 
     processed_manifest = MappingProxyType(
         {
@@ -561,28 +550,18 @@ def _build_mock_runtime(artifact_dir: str, processed_dir: str) -> ApiRuntime:
             "processed_manifest_id": "mock-processed-manifest",
         }
     )
-    score_versions = MappingProxyType(
-        {
-            "FULL": _build_composite_model_version("FULL"),
-            "REDUCED": _build_composite_model_version("REDUCED"),
-        }
-    )
+    health_model_version = _build_composite_model_version("FULL")
 
     return ApiRuntime(
         artifact_dir=artifact_dir,
         processed_dir=processed_dir,
         processed_manifest=processed_manifest,
         full_builder=full_builder,
-        reduced_builder=reduced_builder,
         full_model=full_model,
-        reduced_model=reduced_model,
         full_calibrator=full_calibrator,
-        reduced_calibrator=reduced_calibrator,
         full_shap_explainer=full_explainer,
-        reduced_shap_explainer=reduced_explainer,
         model_fairness_audit_passed=False,
-        score_model_versions=score_versions,
-        health_model_version=score_versions["FULL"],
+        health_model_version=health_model_version,
         reproducibility_report=MappingProxyType({"mode": "mock"}),
         mock_mode=True,
     )
@@ -595,7 +574,7 @@ def _load_real_runtime(
 ) -> ApiRuntime:
     processed_manifest = _load_processed_manifest(processed_dir)
     builder_module = _import_builder_artifacts_module()
-    full_builder, reduced_builder = _load_validated_builders(
+    full_builder = _load_validated_builder(
         builder_module,
         artifact_dir=artifact_dir,
         processed_dir=processed_dir,
@@ -604,32 +583,17 @@ def _load_real_runtime(
     )
 
     full_model = _load_joblib_artifact(artifact_dir, "full_model.joblib", "FULL model")
-    reduced_model = _load_joblib_artifact(artifact_dir, "reduced_model.joblib", "REDUCED model")
     full_calibrator = _load_joblib_artifact(artifact_dir, "full_calibrator.joblib", "FULL calibrator")
-    reduced_calibrator = _load_joblib_artifact(
-        artifact_dir, "reduced_calibrator.joblib", "REDUCED calibrator"
-    )
     full_explainer = _load_joblib_artifact(
         artifact_dir, "full_shap_explainer.joblib", "FULL SHAP explainer"
-    )
-    reduced_explainer = _load_joblib_artifact(
-        artifact_dir, "reduced_shap_explainer.joblib", "REDUCED SHAP explainer"
     )
     fairness_result = _load_fairness_result(artifact_dir)
     reproducibility_report = _load_optional_json(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
 
     _validate_tier_runtime("FULL", full_builder, full_model, full_calibrator, full_explainer)
-    _validate_tier_runtime("REDUCED", reduced_builder, reduced_model, reduced_calibrator, reduced_explainer)
-
-    score_versions = MappingProxyType(
-        {
-            "FULL": _build_composite_model_version("FULL"),
-            "REDUCED": _build_composite_model_version("REDUCED"),
-        }
-    )
     health_model_version = _resolve_health_model_version(
         reproducibility_report,
-        fallback=score_versions["FULL"],
+        fallback=_build_composite_model_version("FULL"),
     )
 
     return ApiRuntime(
@@ -637,15 +601,10 @@ def _load_real_runtime(
         processed_dir=processed_dir,
         processed_manifest=MappingProxyType(processed_manifest),
         full_builder=full_builder,
-        reduced_builder=reduced_builder,
         full_model=full_model,
-        reduced_model=reduced_model,
         full_calibrator=full_calibrator,
-        reduced_calibrator=reduced_calibrator,
         full_shap_explainer=full_explainer,
-        reduced_shap_explainer=reduced_explainer,
         model_fairness_audit_passed=fairness_result,
-        score_model_versions=score_versions,
         health_model_version=health_model_version,
         reproducibility_report=MappingProxyType(reproducibility_report),
         mock_mode=False,
@@ -675,14 +634,14 @@ def _import_builder_artifacts_module() -> ModuleType:
         ) from exc
 
 
-def _load_validated_builders(
+def _load_validated_builder(
     builder_module: ModuleType,
     *,
     artifact_dir: str,
     processed_dir: str,
     processed_manifest: Mapping[str, Any],
     strict_artifacts: bool,
-) -> tuple[Any, Any]:
+) -> Any:
     common_kwargs = {
         "artifact_dir": artifact_dir,
         "processed_dir": processed_dir,
@@ -699,44 +658,35 @@ def _load_validated_builders(
         loader = getattr(builder_module, loader_name, None)
         if callable(loader):
             result = _call_with_supported_kwargs(loader, **common_kwargs)
-            return _coerce_builder_pair(result)
+            return _coerce_full_builder(result)
 
     generic_loader = getattr(builder_module, "load_builder", None)
     if callable(generic_loader):
-        full_builder = _call_with_supported_kwargs(generic_loader, tier="FULL", **common_kwargs)
-        reduced_builder = _call_with_supported_kwargs(generic_loader, tier="REDUCED", **common_kwargs)
-        return full_builder, reduced_builder
+        return _call_with_supported_kwargs(generic_loader, tier="FULL", **common_kwargs)
 
     full_loader = getattr(builder_module, "load_full_builder", None)
-    reduced_loader = getattr(builder_module, "load_reduced_builder", None)
-    if callable(full_loader) and callable(reduced_loader):
-        full_builder = _call_with_supported_kwargs(full_loader, tier="FULL", **common_kwargs)
-        reduced_builder = _call_with_supported_kwargs(reduced_loader, tier="REDUCED", **common_kwargs)
-        return full_builder, reduced_builder
+    if callable(full_loader):
+        return _call_with_supported_kwargs(full_loader, tier="FULL", **common_kwargs)
 
     raise RuntimeError(
         "src.builder_artifacts.py does not expose a supported builder loader/validator interface"
     )
 
 
-def _coerce_builder_pair(result: Any) -> tuple[Any, Any]:
+def _coerce_full_builder(result: Any) -> Any:
     if isinstance(result, dict):
         full_builder = result.get("full_builder") or result.get("FULL") or result.get("full")
-        reduced_builder = (
-            result.get("reduced_builder") or result.get("REDUCED") or result.get("reduced")
-        )
-        if full_builder is not None and reduced_builder is not None:
-            return full_builder, reduced_builder
+        if full_builder is not None:
+            return full_builder
 
-    if isinstance(result, (tuple, list)) and len(result) == 2:
-        return result[0], result[1]
+    if isinstance(result, (tuple, list)) and len(result) >= 1:
+        return result[0]
 
     full_builder = getattr(result, "full_builder", None)
-    reduced_builder = getattr(result, "reduced_builder", None)
-    if full_builder is not None and reduced_builder is not None:
-        return full_builder, reduced_builder
+    if full_builder is not None:
+        return full_builder
 
-    raise RuntimeError("Builder loader must return FULL and REDUCED builders together")
+    raise RuntimeError("Builder loader must return a FULL builder")
 
 
 def _call_with_supported_kwargs(func: Any, **kwargs: Any) -> Any:
@@ -814,10 +764,7 @@ def _validate_tier_runtime(
 
 
 def _build_smoke_payload(tier: str) -> dict[str, Any]:
-    demo_payload = _build_demo_seed_payload()
-    if tier.upper() == "REDUCED":
-        return {"application": dict(demo_payload["application"])}
-    return demo_payload
+    return _build_demo_seed_payload()
 
 
 def _build_demo_seed_payload() -> dict[str, Any]:
@@ -947,15 +894,12 @@ def _build_demo_config(runtime: ApiRuntime) -> dict[str, Any]:
     return {
         "runtimeMode": "mock" if runtime.mock_mode else "real",
         "healthModelVersion": runtime.health_model_version,
-        "scoreModelVersions": dict(runtime.score_model_versions),
+        "scoreModelVersions": {"FULL": runtime.health_model_version},
         "fairnessAuditPassed": runtime.model_fairness_audit_passed,
         "fairnessAuditVersion": FAIRNESS_AUDIT_VERSION,
         "defaultTier": DEMO_DEFAULT_TIER,
         "sections": sections,
-        "samplePayloads": {
-            "REDUCED": {"application": dict(sample_payload["application"])},
-            "FULL": sample_payload,
-        },
+        "samplePayloads": {"FULL": sample_payload},
         "routes": {
             "health": "/health",
             "score": "/score",
