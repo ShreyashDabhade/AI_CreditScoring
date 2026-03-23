@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import pickle
@@ -13,17 +14,29 @@ from typing import Any
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(os.getcwd(), ".mplconfig"))
 
 import joblib
-import lightgbm as lgb
 import matplotlib
 import numpy as np
 import pandas as pd
 matplotlib.use("Agg")
-import shap
 import sklearn
-import xgboost as xgb
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+
+try:
+    import lightgbm as lgb
+except Exception:  # pragma: no cover - environment-specific dependency availability
+    lgb = None
+
+try:
+    import shap
+except Exception:  # pragma: no cover - environment-specific dependency availability
+    shap = None
+
+try:
+    import xgboost as xgb
+except Exception:  # pragma: no cover - environment-specific dependency availability
+    xgb = None
 
 from src.builder_artifacts import (
     BuilderValidationError,
@@ -63,9 +76,21 @@ POLICY_APPROVE_THRESHOLD = 0.15
 POLICY_REVIEW_THRESHOLD = 0.35
 
 FULL_MODEL_ARTIFACT_PATH = "artifacts/full_model.joblib"
+REDUCED_MODEL_ARTIFACT_PATH = "artifacts/reduced_model.joblib"
 FULL_CALIBRATOR_ARTIFACT_PATH = "artifacts/full_calibrator.joblib"
+REDUCED_CALIBRATOR_ARTIFACT_PATH = "artifacts/reduced_calibrator.joblib"
 FULL_SHAP_EXPLAINER_ARTIFACT_PATH = "artifacts/full_shap_explainer.joblib"
+REDUCED_SHAP_EXPLAINER_ARTIFACT_PATH = "artifacts/reduced_shap_explainer.joblib"
 REPRODUCIBILITY_REPORT_PATH = "artifacts/reproducibility_report.json"
+REQUIRED_TIER_METADATA_KEYS = (
+    "model_family",
+    "requires_linear_features",
+    "processed_manifest_id",
+    "version",
+    "selected_metric",
+    "val_model_metrics",
+    "test_metrics",
+)
 
 PROCESSED_SPLIT_NAMES = ["train", "val_model", "val_policy", "test"]
 PROCESSED_DATA_RECOVERY_NOTE = (
@@ -95,11 +120,75 @@ def decision_from_pd(pd_value: float) -> str:
     return "DECLINE"
 
 
+def _artifact_path(artifact_dir: str, default_path: str) -> str:
+    return os.path.join(artifact_dir, os.path.basename(default_path))
+
+
+def _load_required_joblib(path: str, label: str) -> Any:
+    if not os.path.exists(path):
+        raise RuntimeError(f"Missing required {label}: {path}")
+    try:
+        return joblib.load(path)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load {label}: {path}") from exc
+
+
+def _tier_version(tier: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y.%m")
+    return f"{tier.lower()}_v{stamp}.0"
+
+
 def load_artifacts(artifact_dir: str = "artifacts") -> dict[str, Any]:
+    report_path = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_PATH)
+    if not os.path.exists(report_path):
+        raise RuntimeError(f"Missing required reproducibility report: {report_path}")
+    try:
+        with open(report_path, "r", encoding="utf-8") as handle:
+            report = json.load(handle)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to read reproducibility report: {report_path}") from exc
+    if not isinstance(report, dict):
+        raise RuntimeError(f"reproducibility_report.json must contain a JSON object: {report_path}")
+
+    tiers = report.get("tiers")
+    if not isinstance(tiers, dict):
+        raise RuntimeError("reproducibility_report.json must contain a tiers object")
+    for tier in ("FULL", "REDUCED"):
+        tier_meta = tiers.get(tier)
+        if not isinstance(tier_meta, dict):
+            raise RuntimeError(f"reproducibility_report.json missing {tier} metadata")
+        missing_keys = [key for key in REQUIRED_TIER_METADATA_KEYS if key not in tier_meta]
+        if missing_keys:
+            raise RuntimeError(
+                f"reproducibility_report.json missing {tier} keys: {sorted(missing_keys)}"
+            )
+
     return {
-        "full_model": joblib.load(os.path.join(artifact_dir, "full_model.joblib")),
-        "full_calibrator": joblib.load(os.path.join(artifact_dir, "full_calibrator.joblib")),
-        "full_shap_explainer": joblib.load(os.path.join(artifact_dir, "full_shap_explainer.joblib")),
+        "full_model": _load_required_joblib(
+            _artifact_path(artifact_dir, FULL_MODEL_ARTIFACT_PATH),
+            "FULL model",
+        ),
+        "reduced_model": _load_required_joblib(
+            _artifact_path(artifact_dir, REDUCED_MODEL_ARTIFACT_PATH),
+            "REDUCED model",
+        ),
+        "full_calibrator": _load_required_joblib(
+            _artifact_path(artifact_dir, FULL_CALIBRATOR_ARTIFACT_PATH),
+            "FULL calibrator",
+        ),
+        "reduced_calibrator": _load_required_joblib(
+            _artifact_path(artifact_dir, REDUCED_CALIBRATOR_ARTIFACT_PATH),
+            "REDUCED calibrator",
+        ),
+        "full_shap_explainer": _load_required_joblib(
+            _artifact_path(artifact_dir, FULL_SHAP_EXPLAINER_ARTIFACT_PATH),
+            "FULL SHAP explainer",
+        ),
+        "reduced_shap_explainer": _load_required_joblib(
+            _artifact_path(artifact_dir, REDUCED_SHAP_EXPLAINER_ARTIFACT_PATH),
+            "REDUCED SHAP explainer",
+        ),
+        "reproducibility_report": report,
     }
 
 
@@ -304,6 +393,8 @@ def _train_xgboost(
     X_val_model: pd.DataFrame,
     y_val_model: np.ndarray,
 ) -> xgb.XGBClassifier:
+    if xgb is None:
+        raise RuntimeError("xgboost is required to train XGBoost candidates")
     model = xgb.XGBClassifier(
         n_estimators=300,
         max_depth=6,
@@ -326,6 +417,8 @@ def _train_xgboost(
 
 
 def _train_lightgbm(X_train: pd.DataFrame, y_train: np.ndarray) -> lgb.LGBMClassifier:
+    if lgb is None:
+        raise RuntimeError("lightgbm is required to train LightGBM candidates")
     model = lgb.LGBMClassifier(
         n_estimators=300,
         max_depth=6,
@@ -380,6 +473,8 @@ def _fit_calibrator(raw_scores: np.ndarray, y_true: np.ndarray, model_name: str)
 
 
 def _build_shap_explainer(model: Any, X_background: pd.DataFrame) -> SerializableShapExplainer:
+    if shap is None:
+        raise RuntimeError("shap is required to build SHAP explainers")
     background = X_background.sample(
         n=min(256, len(X_background)),
         random_state=SEED,
@@ -520,6 +615,39 @@ def _select_official_champion(results: list[CandidateResult]) -> CandidateResult
     return max(full_results, key=lambda result: (result.val_model_auc, result.test_auc))
 
 
+def _select_tier_champion(results: list[CandidateResult], tier: str) -> CandidateResult:
+    tier_results = [result for result in results if result.tier == tier.upper()]
+    if not tier_results:
+        raise RuntimeError(f"Champion selection requires {tier.upper()}-tier candidates")
+    return max(tier_results, key=lambda result: (result.val_model_auc, result.test_auc))
+
+
+def _build_tier_artifacts(
+    result: CandidateResult,
+    feature_sets: dict[tuple[str, str], dict[str, pd.DataFrame]],
+    labels: dict[str, np.ndarray],
+) -> dict[str, Any]:
+    feature_mode = "linear" if result.model_name == "logistic_regression" else "tree"
+    tier_features = feature_sets[(result.tier, feature_mode)]
+    calibrator = _fit_calibrator(
+        result.raw_scores["val_policy"],
+        labels["val_policy"],
+        result.model_name,
+    )
+    calibrated_val_policy = calibrator.predict(result.raw_scores["val_policy"])
+    calibrated_test = calibrator.predict(result.raw_scores["test"])
+    return {
+        "feature_mode": feature_mode,
+        "calibrator": calibrator,
+        "explainer": _build_shap_explainer(result.estimator, tier_features["train"]),
+        "calibrated_metrics": {
+            "metric_kind": "calibrated_probability_auc",
+            "val_policy_auc": _model_metrics(labels["val_policy"], calibrated_val_policy),
+            "test_auc": _model_metrics(labels["test"], calibrated_test),
+        },
+    }
+
+
 def _adversarial_validation_summary(
     *,
     adversarial_frames: dict[str, pd.DataFrame],
@@ -630,10 +758,10 @@ def _environment_metadata() -> dict[str, str]:
         "pandas_version": pd.__version__,
         "numpy_version": np.__version__,
         "scikit_learn_version": sklearn.__version__,
-        "xgboost_version": xgb.__version__,
-        "lightgbm_version": lgb.__version__,
+        "xgboost_version": getattr(xgb, "__version__", "unavailable"),
+        "lightgbm_version": getattr(lgb, "__version__", "unavailable"),
         "joblib_version": joblib.__version__,
-        "shap_version": shap.__version__,
+        "shap_version": getattr(shap, "__version__", "unavailable"),
     }
 
 
@@ -645,16 +773,22 @@ def run_training(
     require_git_match: bool = False,
 ) -> dict[str, Any]:
     os.makedirs(artifact_dir, exist_ok=True)
-    full_builder_path = os.path.join(artifact_dir, os.path.basename(DEFAULT_FULL_BUILDER_PATH))
-    reduced_builder_path = os.path.join(artifact_dir, os.path.basename(DEFAULT_REDUCED_BUILDER_PATH))
-    full_model_path = os.path.join(artifact_dir, "full_model.joblib")
-    full_calibrator_path = os.path.join(artifact_dir, "full_calibrator.joblib")
-    full_shap_explainer_path = os.path.join(artifact_dir, "full_shap_explainer.joblib")
-    reproducibility_report_path = os.path.join(artifact_dir, "reproducibility_report.json")
+    full_builder_path = _artifact_path(artifact_dir, DEFAULT_FULL_BUILDER_PATH)
+    reduced_builder_path = _artifact_path(artifact_dir, DEFAULT_REDUCED_BUILDER_PATH)
+    full_model_path = _artifact_path(artifact_dir, FULL_MODEL_ARTIFACT_PATH)
+    reduced_model_path = _artifact_path(artifact_dir, REDUCED_MODEL_ARTIFACT_PATH)
+    full_calibrator_path = _artifact_path(artifact_dir, FULL_CALIBRATOR_ARTIFACT_PATH)
+    reduced_calibrator_path = _artifact_path(artifact_dir, REDUCED_CALIBRATOR_ARTIFACT_PATH)
+    full_shap_explainer_path = _artifact_path(artifact_dir, FULL_SHAP_EXPLAINER_ARTIFACT_PATH)
+    reduced_shap_explainer_path = _artifact_path(artifact_dir, REDUCED_SHAP_EXPLAINER_ARTIFACT_PATH)
+    reproducibility_report_path = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_PATH)
     processed_manifest_file = processed_manifest_path(data_processed_dir)
 
     splits, processed_manifest, _, adversarial_frames = _load_processed_lineage(data_processed_dir)
     processed_manifest_fp = processed_manifest["processed_manifest_fingerprint"]
+    processed_manifest_id = str(
+        processed_manifest.get("processed_manifest_id") or processed_manifest_fp
+    )
     labels = {split_name: df["TARGET"].to_numpy() for split_name, df in splits.items()}
 
     quarantine_existing_paths(
@@ -664,8 +798,11 @@ def run_training(
             reduced_builder_path,
             builder_manifest_path(reduced_builder_path),
             full_model_path,
+            reduced_model_path,
             full_calibrator_path,
+            reduced_calibrator_path,
             full_shap_explainer_path,
+            reduced_shap_explainer_path,
             reproducibility_report_path,
         ],
         os.path.join(artifact_dir, "quarantine", "training_outputs"),
@@ -803,30 +940,19 @@ def run_training(
         )
     )
 
+    full_champion = _select_tier_champion(results, "FULL")
+    reduced_champion = _select_tier_champion(results, "REDUCED")
     champion = _select_official_champion(results)
-    champion_feature_mode = "linear" if champion.model_name == "logistic_regression" else "tree"
-    champion_feature_sets = feature_sets[(champion.tier, champion_feature_mode)]
-    calibrator = _fit_calibrator(
-        champion.raw_scores["val_policy"],
-        labels["val_policy"],
-        champion.model_name,
-    )
-    calibrated_val_policy = calibrator.predict(champion.raw_scores["val_policy"])
-    calibrated_test = calibrator.predict(champion.raw_scores["test"])
-    calibrated_metrics = {
-        "metric_kind": "calibrated_probability_auc",
-        "val_policy_auc": _model_metrics(labels["val_policy"], calibrated_val_policy),
-        "test_auc": _model_metrics(labels["test"], calibrated_test),
-    }
+    full_tier_artifacts = _build_tier_artifacts(full_champion, feature_sets, labels)
+    reduced_tier_artifacts = _build_tier_artifacts(reduced_champion, feature_sets, labels)
+    calibrated_metrics = full_tier_artifacts["calibrated_metrics"]
 
-    shap_explainer = _build_shap_explainer(
-        champion.estimator,
-        champion_feature_sets["train"],
-    )
-
-    joblib.dump(champion.estimator, full_model_path)
-    joblib.dump(calibrator, full_calibrator_path)
-    joblib.dump(shap_explainer, full_shap_explainer_path)
+    joblib.dump(full_champion.estimator, full_model_path)
+    joblib.dump(full_tier_artifacts["calibrator"], full_calibrator_path)
+    joblib.dump(full_tier_artifacts["explainer"], full_shap_explainer_path)
+    joblib.dump(reduced_champion.estimator, reduced_model_path)
+    joblib.dump(reduced_tier_artifacts["calibrator"], reduced_calibrator_path)
+    joblib.dump(reduced_tier_artifacts["explainer"], reduced_shap_explainer_path)
 
     adversarial_summary = _adversarial_validation_summary(
         adversarial_frames=adversarial_frames,
@@ -846,13 +972,22 @@ def run_training(
         )
     )
 
+    full_version = _tier_version("FULL")
+    reduced_version = _tier_version("REDUCED")
+
     report = {
         "seed": SEED,
         "n_jobs": N_JOBS,
         "feature_engineering_version": FEATURE_ENGINEERING_VERSION,
         "aggregate_contract_version": AGGREGATE_CONTRACT_VERSION,
         "git_commit": current_git_commit(),
+        "deployed_model_version": full_version,
+        "model_versions": {
+            "FULL": full_version,
+            "REDUCED": reduced_version,
+        },
         "processed_lineage": {
+            "processed_manifest_id": processed_manifest_id,
             "processed_manifest_path": processed_manifest_file,
             "processed_manifest_fingerprint": processed_manifest_fp,
         },
@@ -875,8 +1010,49 @@ def run_training(
         },
         "model_artifacts": {
             "full_model_path": full_model_path,
+            "reduced_model_path": reduced_model_path,
             "full_calibrator_path": full_calibrator_path,
+            "reduced_calibrator_path": reduced_calibrator_path,
             "full_shap_explainer_path": full_shap_explainer_path,
+            "reduced_shap_explainer_path": reduced_shap_explainer_path,
+        },
+        "tiers": {
+            "FULL": {
+                "version": full_version,
+                "model_family": full_champion.model_name,
+                "requires_linear_features": full_tier_artifacts["feature_mode"] == "linear",
+                "selected_metric": "uncalibrated_probability_auc",
+                "processed_manifest_id": processed_manifest_id,
+                "val_model_metrics": {
+                    "roc_auc": full_champion.val_model_auc,
+                    "train_auc": full_champion.train_auc,
+                    "val_policy_auc": full_champion.val_policy_auc,
+                    "test_auc": full_champion.test_auc,
+                    "feature_count": full_champion.feature_count,
+                },
+                "test_metrics": {
+                    "roc_auc": full_champion.test_auc,
+                    "calibrated_probability_auc": full_tier_artifacts["calibrated_metrics"]["test_auc"],
+                },
+            },
+            "REDUCED": {
+                "version": reduced_version,
+                "model_family": reduced_champion.model_name,
+                "requires_linear_features": reduced_tier_artifacts["feature_mode"] == "linear",
+                "selected_metric": "uncalibrated_probability_auc",
+                "processed_manifest_id": processed_manifest_id,
+                "val_model_metrics": {
+                    "roc_auc": reduced_champion.val_model_auc,
+                    "train_auc": reduced_champion.train_auc,
+                    "val_policy_auc": reduced_champion.val_policy_auc,
+                    "test_auc": reduced_champion.test_auc,
+                    "feature_count": reduced_champion.feature_count,
+                },
+                "test_metrics": {
+                    "roc_auc": reduced_champion.test_auc,
+                    "calibrated_probability_auc": reduced_tier_artifacts["calibrated_metrics"]["test_auc"],
+                },
+            },
         },
         "split_summary": processed_manifest["split_summary"],
         "duplicate_summary": _duplicate_summary(splits),

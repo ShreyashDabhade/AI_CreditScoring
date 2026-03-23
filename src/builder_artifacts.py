@@ -9,7 +9,7 @@ import tempfile
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import joblib
 import pandas as pd
@@ -453,3 +453,120 @@ def validate_builder_pair(
         hash_ordered_values(list(builder.pre_model_columns_)),
     )
     return builder, manifest, []
+
+
+def _artifact_path(artifact_dir: str, default_path: str) -> str:
+    return os.path.join(artifact_dir, os.path.basename(default_path))
+
+
+def _load_train_split(processed_dir: str) -> pd.DataFrame:
+    train_path = os.path.join(processed_dir, "train.pkl")
+    if not os.path.exists(train_path):
+        raise RuntimeError(f"Missing required processed split: {train_path}")
+    train_df = pd.read_pickle(train_path)
+    if not isinstance(train_df, pd.DataFrame):
+        raise RuntimeError(f"Processed split must be a pandas DataFrame: {train_path}")
+    return train_df
+
+
+def _load_builder_for_tier(
+    tier: str,
+    *,
+    artifact_dir: str,
+    processed_dir: str,
+    processed_manifest: Mapping[str, Any] | None,
+    strict_artifacts: bool,
+    require_git_match: bool = False,
+) -> Any:
+    from src.feature_engineering import (
+        AGGREGATE_CONTRACT_VERSION,
+        ALL_AGGREGATE_FEATURE_COLS,
+        FEATURE_ENGINEERING_VERSION,
+    )
+
+    train_df = _load_train_split(processed_dir)
+    builder_path = _artifact_path(artifact_dir, default_builder_path_for_tier(tier))
+    expected_processed_manifest_fingerprint = None
+    if processed_manifest is not None:
+        candidate = processed_manifest.get("processed_manifest_fingerprint")
+        if candidate is not None:
+            expected_processed_manifest_fingerprint = str(candidate)
+
+    try:
+        if strict_artifacts:
+            builder, _, _ = load_builder_artifact(
+                builder_path,
+                fit_df=train_df,
+                expected_tier=tier,
+                fit_split_name="train",
+                feature_engineering_version=FEATURE_ENGINEERING_VERSION,
+                aggregate_contract_version=AGGREGATE_CONTRACT_VERSION,
+                expected_aggregate_feature_count=(
+                    len(ALL_AGGREGATE_FEATURE_COLS) if tier.upper() == "FULL" else 0
+                ),
+                require_git_match=require_git_match,
+                expected_processed_manifest_fingerprint=expected_processed_manifest_fingerprint,
+            )
+            return builder
+        builder = joblib.load(builder_path)
+        _assert_builder_has_required_attributes(builder)
+        return builder
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load validated {tier.upper()} builder: {builder_path}") from exc
+
+
+def load_validated_builders(
+    *,
+    artifact_dir: str = "artifacts/",
+    processed_dir: str = "data/processed/",
+    processed_manifest: Mapping[str, Any] | None = None,
+    strict_artifacts: bool = True,
+    require_git_match: bool = False,
+    **_: Any,
+) -> dict[str, Any]:
+    return {
+        "full_builder": _load_builder_for_tier(
+            "FULL",
+            artifact_dir=artifact_dir,
+            processed_dir=processed_dir,
+            processed_manifest=processed_manifest,
+            strict_artifacts=strict_artifacts,
+            require_git_match=require_git_match,
+        ),
+        "reduced_builder": _load_builder_for_tier(
+            "REDUCED",
+            artifact_dir=artifact_dir,
+            processed_dir=processed_dir,
+            processed_manifest=processed_manifest,
+            strict_artifacts=strict_artifacts,
+            require_git_match=require_git_match,
+        ),
+    }
+
+
+def load_builder_runtime(**kwargs: Any) -> dict[str, Any]:
+    return load_validated_builders(**kwargs)
+
+
+def load_builders(**kwargs: Any) -> dict[str, Any]:
+    return load_validated_builders(**kwargs)
+
+
+def load_builder(
+    tier: str,
+    *,
+    artifact_dir: str = "artifacts/",
+    processed_dir: str = "data/processed/",
+    processed_manifest: Mapping[str, Any] | None = None,
+    strict_artifacts: bool = True,
+    require_git_match: bool = False,
+    **_: Any,
+) -> Any:
+    return _load_builder_for_tier(
+        tier,
+        artifact_dir=artifact_dir,
+        processed_dir=processed_dir,
+        processed_manifest=processed_manifest,
+        strict_artifacts=strict_artifacts,
+        require_git_match=require_git_match,
+    )

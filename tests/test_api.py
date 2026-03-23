@@ -147,6 +147,69 @@ def _write_processed_manifest(processed_dir: Path) -> None:
     )
 
 
+def _write_reproducibility_report(artifact_dir: Path, processed_manifest_id: str = "processed-001") -> None:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    report = {
+        "deployed_model_version": "deployed-full-2026.03",
+        "model_versions": {
+            "FULL": "full_v2026.03.0",
+            "REDUCED": "reduced_v2026.03.0",
+        },
+        "tiers": {
+            "FULL": {
+                "version": "full_v2026.03.0",
+                "model_family": "xgboost",
+                "requires_linear_features": False,
+                "selected_metric": "roc_auc",
+                "processed_manifest_id": processed_manifest_id,
+                "val_model_metrics": {
+                    "roc_auc": 0.8,
+                    "pr_auc": 0.2,
+                    "accuracy_at_0.50": 0.7,
+                    "policy_accuracy_at_0.35": 0.7,
+                    "log_loss": 0.5,
+                    "brier_score": 0.2,
+                },
+                "test_metrics": {
+                    "roc_auc": 0.79,
+                    "pr_auc": 0.19,
+                    "accuracy_at_0.50": 0.69,
+                    "policy_accuracy_at_0.35": 0.68,
+                    "log_loss": 0.51,
+                    "brier_score": 0.21,
+                },
+            },
+            "REDUCED": {
+                "version": "reduced_v2026.03.0",
+                "model_family": "logistic_regression",
+                "requires_linear_features": True,
+                "selected_metric": "roc_auc",
+                "processed_manifest_id": processed_manifest_id,
+                "val_model_metrics": {
+                    "roc_auc": 0.78,
+                    "pr_auc": 0.18,
+                    "accuracy_at_0.50": 0.68,
+                    "policy_accuracy_at_0.35": 0.67,
+                    "log_loss": 0.52,
+                    "brier_score": 0.22,
+                },
+                "test_metrics": {
+                    "roc_auc": 0.77,
+                    "pr_auc": 0.17,
+                    "accuracy_at_0.50": 0.67,
+                    "policy_accuracy_at_0.35": 0.66,
+                    "log_loss": 0.53,
+                    "brier_score": 0.23,
+                },
+            },
+        },
+    }
+    (artifact_dir / "reproducibility_report.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+
+
 def _write_real_artifacts(artifact_dir: Path) -> None:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     full_builder = SavedBuilderFixture("FULL")
@@ -158,10 +221,7 @@ def _write_real_artifacts(artifact_dir: Path) -> None:
     joblib.dump(SavedExplainerFixture(), artifact_dir / "full_shap_explainer.joblib")
     joblib.dump(SavedExplainerFixture(), artifact_dir / "reduced_shap_explainer.joblib")
     joblib.dump(True, artifact_dir / "model_fairness_audit_passed.joblib")
-    (artifact_dir / "reproducibility_report.json").write_text(
-        json.dumps({"deployed_model_version": "deployed-full-2026.03"}),
-        encoding="utf-8",
-    )
+    _write_reproducibility_report(artifact_dir)
 
 
 def test_create_app_mock_mode_starts_successfully():
@@ -419,6 +479,7 @@ def test_strict_real_mode_fails_when_non_builder_artifact_is_missing(tmp_path, m
     processed_dir = tmp_path / "processed"
     _write_processed_manifest(processed_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    _write_reproducibility_report(artifact_dir)
 
     def loader(**kwargs):
         return {
@@ -477,3 +538,37 @@ def test_internal_error_path_returns_500():
         "error_code": "internal_error",
         "message": "Scoring failed.",
     }
+
+
+def test_invalid_numeric_field_returns_422_in_mock_mode():
+    client = create_app(mock_mode=True).test_client()
+    payload = {"application": _make_application_payload()}
+    payload["application"]["AMT_CREDIT"] = "not-a-number"
+
+    response = client.post("/score", json=payload)
+
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["error_code"] == "invalid_field_values"
+    assert "AMT_CREDIT" in body["missing_fields"]
+
+
+def test_score_batch_returns_ordered_success_and_error_results():
+    client = create_app(mock_mode=True).test_client()
+    bad_application = _make_application_payload()
+    bad_application["AMT_CREDIT"] = "bad"
+    payloads = [
+        {"application": _make_application_payload()},
+        {"application": bad_application},
+    ]
+
+    response = client.post("/score/batch", json=payloads)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["summary"] == {"total": 2, "succeeded": 1, "failed": 1}
+    assert body["results"][0]["index"] == 0
+    assert body["results"][0]["ok"] is True
+    assert body["results"][1]["index"] == 1
+    assert body["results"][1]["ok"] is False
+    assert body["results"][1]["error"]["error_code"] == "invalid_field_values"

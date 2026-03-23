@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-import shap
 from sklearn.isotonic import IsotonicRegression
+
+try:
+    import shap
+except Exception:  # pragma: no cover - dependency availability varies by environment
+    shap = None
 
 
 @dataclass
@@ -29,5 +33,7 @@ class SerializableShapExplainer:
 
     def __call__(self, X: np.ndarray) -> Any:
         if self._explainer is None:
+            if shap is None:
+                raise RuntimeError("shap is required to evaluate the serialized SHAP explainer")
             self._explainer = shap.Explainer(self.model, self.background)
         return self._explainer(X)

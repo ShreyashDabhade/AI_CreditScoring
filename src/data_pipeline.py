@@ -7,8 +7,10 @@ This module handles:
 - Proxy recency sort & ordered split (Stage 3)
 """
 
+from datetime import datetime, timezone
 import os
 from typing import Any
+import uuid
 
 import pandas as pd
 import numpy as np
@@ -262,11 +264,16 @@ def _build_processed_manifest(
     income_cap: float,
     application_train_cleaned_rows: int,
 ) -> dict[str, Any]:
+    manifest_id = f"processed-{uuid.uuid4().hex[:12]}"
     manifest: dict[str, Any] = {
-        "manifest_version": 1,
+        "manifest_version": 2,
+        "processed_manifest_id": manifest_id,
+        "lineage": manifest_id,
+        "created_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "git_commit": current_git_commit(),
         "application_train_cleaned_rows": int(application_train_cleaned_rows),
         "income_cap": float(income_cap),
+        "income_cap_p99": float(income_cap),
         "split_summary": {
             split_name: _split_summary_entry(df)
             for split_name, df in splits.items()

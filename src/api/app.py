@@ -6,11 +6,14 @@ from dataclasses import dataclass
 import importlib
 import inspect
 import json
+import logging
 import os
 import re
 import tempfile
+import time
 from types import MappingProxyType, ModuleType
 from typing import Any, Mapping
+import uuid
 
 from flask import Flask, jsonify, render_template, request
 import joblib
@@ -27,6 +30,7 @@ from configs.config import (
     MODEL_VERSIONS,
 )
 from src.explainability import render_reason, top_5_explanations_from_shap
+from src.models.train import decision_from_pd as trained_decision_from_pd, load_artifacts
 
 ROUTER_VERSION = "router_v1.0.0"
 POLICY_VERSION = "policy_v1.0.0"
@@ -179,6 +183,15 @@ FULL_SECTION_ORDER: tuple[str, ...] = (
 )
 FULL_ONLY_SECTION_ORDER: tuple[str, ...] = FULL_SECTION_ORDER[1:]
 FULL_ONLY_SECTIONS = frozenset(FULL_ONLY_SECTION_ORDER)
+NUMERIC_APPLICATION_FIELDS = tuple(
+    field for field in APPLICATION_REQUIRED_FIELDS if field not in CATEGORICAL_APPLICATION_FIELDS
+)
+NUMERIC_FIELDS_BY_SECTION: Mapping[str, tuple[str, ...]] = MappingProxyType(
+    {
+        "application": NUMERIC_APPLICATION_FIELDS,
+        **{section_name: fields for section_name, fields in AGG_REQUIRED_FIELDS.items()},
+    }
+)
 
 ERROR_MESSAGES: Mapping[str, str] = MappingProxyType(
     {
@@ -188,6 +201,7 @@ ERROR_MESSAGES: Mapping[str, str] = MappingProxyType(
         "partial_full_payload_not_allowed": "Partial FULL payloads are not allowed.",
         "missing_application_fields": "Application payload is missing required fields.",
         "missing_aggregate_fields": "FULL payload is missing required aggregate fields.",
+        "invalid_field_values": "Payload contains invalid field values.",
         "starter_not_supported_in_mvp": "Payload is not supported in MVP.",
         "internal_error": "Scoring failed.",
     }
@@ -211,6 +225,7 @@ class ApiRuntime:
     reduced_shap_explainer: Any
     model_fairness_audit_passed: bool
     score_model_versions: Mapping[str, str]
+    tier_metadata: Mapping[str, Mapping[str, Any]]
     health_model_version: str
     reproducibility_report: Mapping[str, Any]
     mock_mode: bool
@@ -341,6 +356,7 @@ def create_app(
 
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.extensions[RUNTIME_EXTENSION_KEY] = runtime
+    app.logger.setLevel(logging.INFO)
 
     @app.get("/")
     @app.get("/demo")
@@ -365,6 +381,8 @@ def create_app(
 
     @app.post("/score")
     def score():
+        request_id = _request_id()
+        started_at = time.perf_counter()
         try:
             try:
                 payload = request.get_json(silent=False)
@@ -374,16 +392,167 @@ def create_app(
             if payload is None or not isinstance(payload, dict):
                 raise _api_error("bad_request")
 
-            error_code, missing_fields = validate_payload(payload)
+            loaded_runtime = _get_runtime(app)
+            error_code, missing_fields = validate_payload(payload, loaded_runtime)
             if error_code is not None:
                 raise _api_error(error_code, missing_fields)
 
-            response = score_request(payload, _get_runtime(app), mock_mode=mock_mode)
+            response = score_request(payload, loaded_runtime, mock_mode=mock_mode)
+            _log_score_event(
+                app.logger,
+                endpoint="/score",
+                request_id=request_id,
+                payload=payload,
+                response=response,
+                started_at=started_at,
+                status_code=200,
+            )
             return jsonify(response)
         except ApiError as exc:
+            _log_score_event(
+                app.logger,
+                endpoint="/score",
+                request_id=request_id,
+                payload=payload if "payload" in locals() else None,
+                error_code=exc.error_code,
+                started_at=started_at,
+                status_code=exc.status_code,
+            )
             return exc.to_response()
         except Exception:
             app.logger.exception("Scoring failed.")
+            _log_score_event(
+                app.logger,
+                endpoint="/score",
+                request_id=request_id,
+                payload=payload if "payload" in locals() else None,
+                error_code="internal_error",
+                started_at=started_at,
+                status_code=500,
+            )
+            return jsonify(
+                {
+                    "error_code": "internal_error",
+                    "message": ERROR_MESSAGES["internal_error"],
+                }
+            ), 500
+
+    @app.post("/score/batch")
+    def score_batch():
+        request_id = _request_id()
+        started_at = time.perf_counter()
+        try:
+            try:
+                payloads = request.get_json(silent=False)
+            except Exception as exc:  # pragma: no cover - Flask wraps malformed JSON differently by version
+                raise _api_error("bad_request") from exc
+
+            if payloads is None or not isinstance(payloads, list):
+                raise _api_error("bad_request")
+
+            loaded_runtime = _get_runtime(app)
+            results: list[dict[str, Any]] = []
+            success_count = 0
+
+            for index, payload in enumerate(payloads):
+                if not isinstance(payload, dict):
+                    results.append(
+                        {
+                            "index": index,
+                            "ok": False,
+                            "error": {
+                                "error_code": "bad_request",
+                                "message": ERROR_MESSAGES["bad_request"],
+                                "missing_fields": [],
+                            },
+                        }
+                    )
+                    continue
+
+                error_code, missing_fields = validate_payload(payload, loaded_runtime)
+                if error_code is not None:
+                    results.append(
+                        {
+                            "index": index,
+                            "ok": False,
+                            "error": {
+                                "error_code": error_code,
+                                "message": ERROR_MESSAGES[error_code],
+                                "missing_fields": list(missing_fields),
+                            },
+                        }
+                    )
+                    continue
+
+                try:
+                    response = score_request(payload, loaded_runtime, mock_mode=mock_mode)
+                    success_count += 1
+                    results.append({"index": index, "ok": True, "response": response})
+                except ApiError as exc:
+                    results.append(
+                        {
+                            "index": index,
+                            "ok": False,
+                            "error": {
+                                "error_code": exc.error_code,
+                                "message": exc.message,
+                                "missing_fields": list(exc.missing_fields),
+                            },
+                        }
+                    )
+                except Exception:
+                    app.logger.exception("Batch scoring failed for index %s.", index)
+                    results.append(
+                        {
+                            "index": index,
+                            "ok": False,
+                            "error": {
+                                "error_code": "internal_error",
+                                "message": ERROR_MESSAGES["internal_error"],
+                                "missing_fields": [],
+                            },
+                        }
+                    )
+
+            batch_response = {
+                "results": results,
+                "summary": {
+                    "total": len(results),
+                    "succeeded": success_count,
+                    "failed": len(results) - success_count,
+                },
+            }
+            _log_batch_event(
+                app.logger,
+                request_id=request_id,
+                payloads=payloads,
+                batch_response=batch_response,
+                started_at=started_at,
+                status_code=200,
+            )
+            return jsonify(batch_response)
+        except ApiError as exc:
+            _log_batch_event(
+                app.logger,
+                request_id=request_id,
+                payloads=payloads if "payloads" in locals() else None,
+                batch_response=None,
+                started_at=started_at,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+            )
+            return exc.to_response()
+        except Exception:
+            app.logger.exception("Batch scoring failed.")
+            _log_batch_event(
+                app.logger,
+                request_id=request_id,
+                payloads=payloads if "payloads" in locals() else None,
+                batch_response=None,
+                started_at=started_at,
+                status_code=500,
+                error_code="internal_error",
+            )
             return jsonify(
                 {
                     "error_code": "internal_error",
@@ -394,7 +563,10 @@ def create_app(
     return app
 
 
-def validate_payload(payload: dict) -> tuple[str | None, list[str]]:
+def validate_payload(
+    payload: dict,
+    runtime: ApiRuntime | None = None,
+) -> tuple[str | None, list[str]]:
     """Validate the public JSON contract and return an error code if invalid."""
 
     if not isinstance(payload, dict):
@@ -446,7 +618,171 @@ def validate_payload(payload: dict) -> tuple[str | None, list[str]]:
         if missing_aggregate_fields:
             return "missing_aggregate_fields", sorted(missing_aggregate_fields)
 
+    invalid_fields = _collect_invalid_fields(payload, tier=tier, runtime=runtime)
+    if invalid_fields:
+        return "invalid_field_values", sorted(invalid_fields)
+
     return None, []
+
+
+def _collect_invalid_fields(
+    payload: dict,
+    *,
+    tier: str,
+    runtime: ApiRuntime | None,
+) -> list[str]:
+    invalid_fields: list[str] = []
+    application = payload.get("application", {})
+
+    for field_name in NUMERIC_APPLICATION_FIELDS:
+        if not _is_finite_number(application.get(field_name)):
+            invalid_fields.append(field_name)
+
+    if application.get("DAYS_EMPLOYED_ANOM") not in (0, 1, 0.0, 1.0):
+        invalid_fields.append("DAYS_EMPLOYED_ANOM")
+
+    for field_name in CATEGORICAL_APPLICATION_FIELDS:
+        if not _is_valid_categorical_value(
+            field_name,
+            application.get(field_name),
+            tier=tier,
+            runtime=runtime,
+        ):
+            invalid_fields.append(field_name)
+
+    if tier == "FULL":
+        for section_name in FULL_ONLY_SECTION_ORDER:
+            section = payload.get(section_name, {})
+            for field_name in NUMERIC_FIELDS_BY_SECTION[section_name]:
+                if not _is_finite_number(section.get(field_name)):
+                    invalid_fields.append(f"{section_name}.{field_name}")
+
+    return invalid_fields
+
+
+def _is_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or value is None:
+        return False
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return bool(np.isfinite(float(value)))
+    return False
+
+
+def _is_valid_categorical_value(
+    field_name: str,
+    value: Any,
+    *,
+    tier: str,
+    runtime: ApiRuntime | None,
+) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    allowed_values = _allowed_categorical_values(field_name, tier=tier, runtime=runtime)
+    if allowed_values and value not in allowed_values:
+        return False
+    return True
+
+
+def _allowed_categorical_values(
+    field_name: str,
+    *,
+    tier: str,
+    runtime: ApiRuntime | None,
+) -> set[str]:
+    if runtime is not None and not runtime.mock_mode:
+        builder = runtime.full_builder if tier == "FULL" else runtime.reduced_builder
+        rare_map = getattr(builder, "rare_category_maps_", {})
+        fill_values = getattr(builder, "categorical_fill_values_", {})
+        allowed = set(str(v) for v in rare_map.get(field_name, set()))
+        fill_value = fill_values.get(field_name)
+        if fill_value:
+            allowed.add(str(fill_value))
+        if allowed:
+            allowed.add("OTHER")
+        return allowed
+    return set(DEMO_FIELD_OPTIONS.get(field_name, ()))
+
+
+def _utc_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _request_id() -> str:
+    header_value = request.headers.get("X-Request-ID")
+    return header_value or uuid.uuid4().hex
+
+
+def _sanitize_payload_summary(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, list):
+        return {"batch_size": len(payload)}
+    if not isinstance(payload, dict):
+        return {"payload_type": type(payload).__name__}
+    summary: dict[str, Any] = {"top_level_keys": sorted(payload.keys())}
+    application = payload.get("application")
+    if isinstance(application, dict):
+        summary["application_field_count"] = len(application)
+    for section_name in FULL_ONLY_SECTION_ORDER:
+        section = payload.get(section_name)
+        if isinstance(section, dict):
+            summary[f"{section_name}_field_count"] = len(section)
+    return summary
+
+
+def _log_score_event(
+    logger: logging.Logger,
+    *,
+    endpoint: str,
+    request_id: str,
+    payload: Any,
+    started_at: float,
+    status_code: int,
+    response: Mapping[str, Any] | None = None,
+    error_code: str | None = None,
+) -> None:
+    event = {
+        "timestamp": _utc_now_iso(),
+        "request_id": request_id,
+        "endpoint": endpoint,
+        "status_code": status_code,
+        "latency_ms": round((time.perf_counter() - started_at) * 1000.0, 2),
+        "payload_summary": _sanitize_payload_summary(payload),
+        "error_code": error_code,
+    }
+    if response is not None:
+        event.update(
+            {
+                "tier": response.get("coverage_tier"),
+                "probability_of_default": response.get("probability_of_default"),
+                "decision": response.get("decision"),
+                "model_version": response.get("model_version"),
+            }
+        )
+    logger.info(json.dumps(event, default=str))
+
+
+def _log_batch_event(
+    logger: logging.Logger,
+    *,
+    request_id: str,
+    payloads: Any,
+    batch_response: Mapping[str, Any] | None,
+    started_at: float,
+    status_code: int,
+    error_code: str | None = None,
+) -> None:
+    summary = _sanitize_payload_summary(payloads)
+    event = {
+        "timestamp": _utc_now_iso(),
+        "request_id": request_id,
+        "endpoint": "/score/batch",
+        "status_code": status_code,
+        "latency_ms": round((time.perf_counter() - started_at) * 1000.0, 2),
+        "payload_summary": summary,
+        "error_code": error_code,
+    }
+    if batch_response is not None:
+        event["batch_summary"] = dict(batch_response.get("summary", {}))
+    logger.info(json.dumps(event, default=str))
 
 
 def determine_coverage_tier(payload: dict) -> str:
@@ -497,7 +833,7 @@ def build_input_df(payload: dict, tier: str) -> pd.DataFrame:
 def score_request(payload: dict, runtime: ApiRuntime, mock_mode: bool = False) -> dict:
     """Score one request using the loaded immutable runtime."""
 
-    error_code, missing_fields = validate_payload(payload)
+    error_code, missing_fields = validate_payload(payload, runtime)
     if error_code is not None:
         raise _api_error(error_code, missing_fields)
 
@@ -507,11 +843,12 @@ def score_request(payload: dict, runtime: ApiRuntime, mock_mode: bool = False) -
     model = runtime.full_model if tier == "FULL" else runtime.reduced_model
     calibrator = runtime.full_calibrator if tier == "FULL" else runtime.reduced_calibrator
     explainer = runtime.full_shap_explainer if tier == "FULL" else runtime.reduced_shap_explainer
+    requires_linear_features = bool(runtime.tier_metadata[tier]["requires_linear_features"])
 
-    features = _invoke_builder(builder, input_df)
+    features = _invoke_builder(builder, input_df, for_linear_model=requires_linear_features)
     raw_pd = _predict_raw_pd(model, features)
     calibrated_pd = _calibrate_pd(calibrator, raw_pd)
-    decision = _decision_from_pd(calibrated_pd)
+    decision = trained_decision_from_pd(calibrated_pd)
     explanations = (
         _mock_top_5_explanations(features.columns)
         if mock_mode
@@ -567,6 +904,24 @@ def _build_mock_runtime(artifact_dir: str, processed_dir: str) -> ApiRuntime:
             "REDUCED": _build_composite_model_version("REDUCED"),
         }
     )
+    tier_metadata = MappingProxyType(
+        {
+            "FULL": MappingProxyType(
+                {
+                    "model_family": "mock",
+                    "requires_linear_features": False,
+                    "version": score_versions["FULL"],
+                }
+            ),
+            "REDUCED": MappingProxyType(
+                {
+                    "model_family": "mock",
+                    "requires_linear_features": False,
+                    "version": score_versions["REDUCED"],
+                }
+            ),
+        }
+    )
 
     return ApiRuntime(
         artifact_dir=artifact_dir,
@@ -582,6 +937,7 @@ def _build_mock_runtime(artifact_dir: str, processed_dir: str) -> ApiRuntime:
         reduced_shap_explainer=reduced_explainer,
         model_fairness_audit_passed=False,
         score_model_versions=score_versions,
+        tier_metadata=tier_metadata,
         health_model_version=score_versions["FULL"],
         reproducibility_report=MappingProxyType({"mode": "mock"}),
         mock_mode=True,
@@ -602,31 +958,39 @@ def _load_real_runtime(
         processed_manifest=processed_manifest,
         strict_artifacts=strict_artifacts,
     )
-
-    full_model = _load_joblib_artifact(artifact_dir, "full_model.joblib", "FULL model")
-    reduced_model = _load_joblib_artifact(artifact_dir, "reduced_model.joblib", "REDUCED model")
-    full_calibrator = _load_joblib_artifact(artifact_dir, "full_calibrator.joblib", "FULL calibrator")
-    reduced_calibrator = _load_joblib_artifact(
-        artifact_dir, "reduced_calibrator.joblib", "REDUCED calibrator"
-    )
-    full_explainer = _load_joblib_artifact(
-        artifact_dir, "full_shap_explainer.joblib", "FULL SHAP explainer"
-    )
-    reduced_explainer = _load_joblib_artifact(
-        artifact_dir, "reduced_shap_explainer.joblib", "REDUCED SHAP explainer"
-    )
+    artifacts = load_artifacts(artifact_dir)
+    reproducibility_report = artifacts["reproducibility_report"]
+    tier_metadata = _resolve_tier_metadata(reproducibility_report)
+    processed_manifest_id = processed_manifest.get("processed_manifest_id")
+    for tier_name in ("FULL", "REDUCED"):
+        if tier_metadata[tier_name].get("processed_manifest_id") != processed_manifest_id:
+            raise RuntimeError(f"{tier_name} artifact manifest mismatch")
+    full_model = artifacts["full_model"]
+    reduced_model = artifacts["reduced_model"]
+    full_calibrator = artifacts["full_calibrator"]
+    reduced_calibrator = artifacts["reduced_calibrator"]
+    full_explainer = artifacts["full_shap_explainer"]
+    reduced_explainer = artifacts["reduced_shap_explainer"]
     fairness_result = _load_fairness_result(artifact_dir)
-    reproducibility_report = _load_optional_json(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
 
-    _validate_tier_runtime("FULL", full_builder, full_model, full_calibrator, full_explainer)
-    _validate_tier_runtime("REDUCED", reduced_builder, reduced_model, reduced_calibrator, reduced_explainer)
-
-    score_versions = MappingProxyType(
-        {
-            "FULL": _build_composite_model_version("FULL"),
-            "REDUCED": _build_composite_model_version("REDUCED"),
-        }
+    _validate_tier_runtime(
+        "FULL",
+        full_builder,
+        full_model,
+        full_calibrator,
+        full_explainer,
+        requires_linear_features=bool(tier_metadata["FULL"]["requires_linear_features"]),
     )
+    _validate_tier_runtime(
+        "REDUCED",
+        reduced_builder,
+        reduced_model,
+        reduced_calibrator,
+        reduced_explainer,
+        requires_linear_features=bool(tier_metadata["REDUCED"]["requires_linear_features"]),
+    )
+
+    score_versions = MappingProxyType(_resolve_score_versions(reproducibility_report))
     health_model_version = _resolve_health_model_version(
         reproducibility_report,
         fallback=score_versions["FULL"],
@@ -646,6 +1010,7 @@ def _load_real_runtime(
         reduced_shap_explainer=reduced_explainer,
         model_fairness_audit_passed=fairness_result,
         score_model_versions=score_versions,
+        tier_metadata=tier_metadata,
         health_model_version=health_model_version,
         reproducibility_report=MappingProxyType(reproducibility_report),
         mock_mode=False,
@@ -791,10 +1156,12 @@ def _validate_tier_runtime(
     model: Any,
     calibrator: Any,
     explainer: Any,
+    *,
+    requires_linear_features: bool = False,
 ) -> None:
     smoke_payload = _build_smoke_payload(tier)
     smoke_df = build_input_df(smoke_payload, tier)
-    features = _invoke_builder(builder, smoke_df)
+    features = _invoke_builder(builder, smoke_df, for_linear_model=requires_linear_features)
 
     if features.shape[0] != 1:
         raise RuntimeError(f"{tier} builder smoke transform must return exactly one row")
@@ -959,13 +1326,23 @@ def _build_demo_config(runtime: ApiRuntime) -> dict[str, Any]:
         "routes": {
             "health": "/health",
             "score": "/score",
+            "scoreBatch": "/score/batch",
         },
     }
 
 
-def _invoke_builder(builder: Any, df: pd.DataFrame) -> pd.DataFrame:
+def _invoke_builder(
+    builder: Any,
+    df: pd.DataFrame,
+    *,
+    for_linear_model: bool = False,
+) -> pd.DataFrame:
     if hasattr(builder, "transform") and callable(builder.transform):
-        result = builder.transform(df)
+        result = _call_with_supported_kwargs(
+            builder.transform,
+            df=df,
+            for_linear_model=for_linear_model,
+        )
     elif callable(builder):
         result = builder(df)
     else:
@@ -997,11 +1374,7 @@ def _calibrate_pd(calibrator: Any, raw_pd: float) -> float:
 
 
 def _decision_from_pd(probability_of_default: float) -> str:
-    if probability_of_default < APPROVE_THRESHOLD:
-        return "APPROVE"
-    if probability_of_default < DECLINE_THRESHOLD:
-        return "REVIEW"
-    return "DECLINE"
+    return trained_decision_from_pd(probability_of_default)
 
 
 def _compute_real_top_5_explanations(explainer: Any, features: pd.DataFrame) -> list[dict[str, str]]:
@@ -1105,9 +1478,38 @@ def _is_scalar_value(value: Any) -> bool:
     return False
 
 
-def _build_composite_model_version(tier: str) -> str:
+def _resolve_tier_metadata(reproducibility_report: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
+    tiers = reproducibility_report.get("tiers", {})
+    if not isinstance(tiers, dict):
+        raise RuntimeError("reproducibility_report.json must contain a tiers object")
+    out: dict[str, Mapping[str, Any]] = {}
+    for tier_name in ("FULL", "REDUCED"):
+        tier_meta = tiers.get(tier_name)
+        if not isinstance(tier_meta, dict):
+            raise RuntimeError(f"reproducibility_report.json missing {tier_name} tier metadata")
+        out[tier_name] = MappingProxyType(dict(tier_meta))
+    return MappingProxyType(out)
+
+
+def _resolve_score_versions(reproducibility_report: Mapping[str, Any]) -> dict[str, str]:
+    report_versions = reproducibility_report.get("model_versions")
+    if isinstance(report_versions, dict):
+        full_base = report_versions.get("FULL")
+        reduced_base = report_versions.get("REDUCED")
+        if isinstance(full_base, str) and isinstance(reduced_base, str):
+            return {
+                "FULL": _build_composite_model_version("FULL", base_version=full_base),
+                "REDUCED": _build_composite_model_version("REDUCED", base_version=reduced_base),
+            }
+    return {
+        "FULL": _build_composite_model_version("FULL"),
+        "REDUCED": _build_composite_model_version("REDUCED"),
+    }
+
+
+def _build_composite_model_version(tier: str, base_version: str | None = None) -> str:
     tier_key = tier.lower()
-    tier_version = MODEL_VERSIONS.get(tier_key, f"{tier_key}_unknown")
+    tier_version = base_version or MODEL_VERSIONS.get(tier_key, f"{tier_key}_unknown")
     fairness_tag = _fairness_tag_from_version(FAIRNESS_AUDIT_VERSION)
     return f"{tier_version}|{ROUTER_VERSION}|{POLICY_VERSION}|fairness_v{fairness_tag}"
 
