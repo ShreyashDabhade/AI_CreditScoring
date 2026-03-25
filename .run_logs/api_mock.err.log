@@ -1,0 +1,7 @@
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+Press CTRL+C to quit
+127.0.0.1 - - [25/Mar/2026 21:56:09] "GET /health HTTP/1.1" 200 -
+127.0.0.1 - - [25/Mar/2026 21:56:33] "GET /health HTTP/1.1" 200 -
+[2026-03-25 21:56:54,116] INFO in app: {"timestamp": "2026-03-25T16:26:54Z", "request_id": "0f9bd865f43a4f9e992a26d1c87f5904", "endpoint": "/score", "status_code": 200, "latency_ms": 11.75, "payload_summary": {"top_level_keys": ["application"], "application_field_count": 33}, "error_code": null, "tier": "REDUCED", "probability_of_default": 0.5131760092051028, "decision": "DECLINE", "model_version": "reduced_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1"}
+127.0.0.1 - - [25/Mar/2026 21:56:54] "POST /score HTTP/1.1" 200 -

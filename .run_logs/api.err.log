@@ -1,0 +1,48 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\flask\__main__.py", line 3, in <module>
+    main()
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\flask\cli.py", line 1105, in main
+    cli.main()
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\click\core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\click\core.py", line 1873, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\click\core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\click\core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\click\decorators.py", line 93, in new_func
+    return ctx.invoke(f, obj, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\click\core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\flask\cli.py", line 953, in run_command
+    raise e from None
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\flask\cli.py", line 937, in run_command
+    app: WSGIApplication = info.load_app()
+                           ^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\flask\cli.py", line 335, in load_app
+    app = locate_app(import_name, name)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\flask\cli.py", line 264, in locate_app
+    return find_app_by_string(module, app_name)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\venv\Lib\site-packages\flask\cli.py", line 178, in find_app_by_string
+    app = attr(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\src\api\app.py", line 350, in create_app
+    else _load_real_runtime(
+         ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\src\api\app.py", line 961, in _load_real_runtime
+    artifacts = load_artifacts(artifact_dir)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\shrey\Everything\AI_CreditScoring\src\models\train.py", line 155, in load_artifacts
+    raise RuntimeError("reproducibility_report.json must contain a tiers object")
+RuntimeError: reproducibility_report.json must contain a tiers object
