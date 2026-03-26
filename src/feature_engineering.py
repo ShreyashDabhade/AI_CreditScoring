@@ -115,6 +115,13 @@ PREVIOUS_AGG_COLS = [
     "PREV_APP_CREDIT_DIFF_MEAN",
     "PREV_DAYS_DECISION_MAX",
     "PREV_RATE_DOWN_PAYMENT_MEAN",
+    "PREV_APP_CREDIT_RATIO_MEAN",
+    "PREV_CREDIT_GOODS_RATIO_MEAN",
+    "PREV_RECENT_365_COUNT",
+    "PREV_RECENT_365_REFUSAL_RATE",
+    "PREV_RECENT_365_APP_CREDIT_RATIO_MEAN",
+    "PREV_LAST_REFUSED_FLAG",
+    "PREV_LAST_APP_CREDIT_RATIO",
 ]
 INSTALLMENTS_AGG_COLS = [
     "INST_RECORD_COUNT",
@@ -124,6 +131,12 @@ INSTALLMENTS_AGG_COLS = [
     "INST_PAYMENT_RATIO_MEAN",
     "INST_PAYMENT_RATIO_MIN",
     "INST_LATE_COUNT",
+    "INST_PAYMENT_RATIO_STD",
+    "INST_UNDERPAY_RATE",
+    "INST_SEVERE_DPD_RATE",
+    "INST_RECENT_365_DPD_MEAN",
+    "INST_RECENT_365_DPD_MAX",
+    "INST_RECENT_365_PAYMENT_RATIO_MEAN",
 ]
 POS_CASH_AGG_COLS = [
     "POS_RECORD_COUNT",
@@ -153,6 +166,22 @@ ALL_AGGREGATE_FEATURE_COLS = (
     + POS_CASH_AGG_COLS
     + CREDIT_CARD_AGG_COLS
 )
+AGGREGATE_FAMILY_COLS = {
+    "BUREAU": BUREAU_AGG_COLS,
+    "PREVIOUS_APPLICATION": PREVIOUS_AGG_COLS,
+    "INSTALLMENTS": INSTALLMENTS_AGG_COLS,
+    "POS_CASH": POS_CASH_AGG_COLS,
+    "CREDIT_CARD": CREDIT_CARD_AGG_COLS,
+}
+DEFAULT_FULL_FEATURE_VIEW = "FULL_COMPLETE"
+FULL_FEATURE_VIEWS = {
+    "FULL_COMPLETE": ("BUREAU", "PREVIOUS_APPLICATION", "INSTALLMENTS", "POS_CASH", "CREDIT_CARD"),
+    "FULL_NO_CREDIT_CARD": ("BUREAU", "PREVIOUS_APPLICATION", "INSTALLMENTS", "POS_CASH"),
+    "FULL_NO_POS_CASH": ("BUREAU", "PREVIOUS_APPLICATION", "INSTALLMENTS", "CREDIT_CARD"),
+    "FULL_NO_PREVIOUS_APPLICATION": ("BUREAU", "INSTALLMENTS", "POS_CASH", "CREDIT_CARD"),
+    "FULL_NO_INSTALLMENTS": ("BUREAU", "PREVIOUS_APPLICATION", "POS_CASH", "CREDIT_CARD"),
+    "FULL_NO_BUREAU": ("PREVIOUS_APPLICATION", "INSTALLMENTS", "POS_CASH", "CREDIT_CARD"),
+}
 FULL_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/full_feature_builder.joblib"
 REDUCED_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/reduced_feature_builder.joblib"
 FULL_FEATURE_BUILDER_MANIFEST_PATH = "artifacts/full_feature_builder.manifest.json"
@@ -171,6 +200,7 @@ __all__ = [
     "assert_unique_key",
     "safe_left_merge_one_to_one",
     "prefix_columns",
+    "resolve_full_feature_view",
 ]
 
 
@@ -279,6 +309,27 @@ def pool_rare_categories(series: pd.Series, min_count: int = 500) -> pd.Series:
 def safe_div(a: pd.Series | np.ndarray, b: pd.Series | np.ndarray) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore"):
         return np.where((pd.notna(a)) & (pd.notna(b)) & (b != 0), a / b, np.nan)
+
+
+def resolve_full_feature_view(feature_view: str | None) -> tuple[str, tuple[str, ...], list[str]]:
+    view_name = DEFAULT_FULL_FEATURE_VIEW if feature_view is None else str(feature_view).upper()
+    if view_name not in FULL_FEATURE_VIEWS:
+        raise ValueError(f"Unsupported FULL feature view: {feature_view!r}")
+    families = FULL_FEATURE_VIEWS[view_name]
+    aggregate_feature_cols: list[str] = []
+    for family in families:
+        aggregate_feature_cols.extend(AGGREGATE_FAMILY_COLS[family])
+    return view_name, families, aggregate_feature_cols
+
+
+def _aggregate_contract_version_for_view(
+    feature_view: str | None,
+    aggregate_feature_cols: list[str],
+) -> str:
+    view_name, _, _ = resolve_full_feature_view(feature_view)
+    if view_name == DEFAULT_FULL_FEATURE_VIEW and list(aggregate_feature_cols) == list(ALL_AGGREGATE_FEATURE_COLS):
+        return AGGREGATE_CONTRACT_VERSION
+    return f"{view_name.lower()}__full_{len(aggregate_feature_cols)}__reduced_0"
 
 
 def assert_unique_key(df: pd.DataFrame, key: str, name: str) -> None:
@@ -447,6 +498,28 @@ def _agg_bureau(raw_dir: str) -> pd.DataFrame:
 def _agg_previous(raw_dir: str) -> pd.DataFrame:
     prev = pd.read_csv(os.path.join(raw_dir, "previous_application.csv")).copy()
     prev["PREV_APP_CREDIT_DIFF_ROW"] = prev["AMT_APPLICATION"] - prev["AMT_CREDIT"]
+    prev["PREV_APP_CREDIT_RATIO_ROW"] = np.where(
+        prev["AMT_CREDIT"].notna() & (prev["AMT_CREDIT"] != 0),
+        safe_div(prev["AMT_APPLICATION"], prev["AMT_CREDIT"]),
+        np.nan,
+    )
+    prev["PREV_CREDIT_GOODS_RATIO_ROW"] = np.where(
+        prev["AMT_GOODS_PRICE"].notna() & (prev["AMT_GOODS_PRICE"] != 0),
+        safe_div(prev["AMT_CREDIT"], prev["AMT_GOODS_PRICE"]),
+        np.nan,
+    )
+    prev["PREV_REFUSED_FLAG"] = (prev["NAME_CONTRACT_STATUS"] == "Refused").astype("int8")
+    prev["PREV_RECENT_365_FLAG"] = (prev["DAYS_DECISION"] >= -365).astype("int8")
+    prev["PREV_RECENT_365_REFUSED_FLAG"] = np.where(
+        prev["DAYS_DECISION"] >= -365,
+        prev["PREV_REFUSED_FLAG"],
+        np.nan,
+    )
+    prev["PREV_RECENT_365_APP_CREDIT_RATIO"] = np.where(
+        prev["DAYS_DECISION"] >= -365,
+        prev["PREV_APP_CREDIT_RATIO_ROW"],
+        np.nan,
+    )
     g = prev.groupby("SK_ID_CURR")
     app_count = g.size()
     approved = g["NAME_CONTRACT_STATUS"].apply(lambda s: (s == "Approved").sum())
@@ -463,9 +536,24 @@ def _agg_previous(raw_dir: str) -> pd.DataFrame:
     out["PREV_APP_CREDIT_DIFF_MEAN"] = g["PREV_APP_CREDIT_DIFF_ROW"].mean()
     out["PREV_DAYS_DECISION_MAX"] = g["DAYS_DECISION"].max()
     out["PREV_RATE_DOWN_PAYMENT_MEAN"] = g["RATE_DOWN_PAYMENT"].mean()
-    result = out.reset_index()
-    assert_unique_key(result, "SK_ID_CURR", "previous_app_agg")
-    return result
+    out["PREV_APP_CREDIT_RATIO_MEAN"] = g["PREV_APP_CREDIT_RATIO_ROW"].mean()
+    out["PREV_CREDIT_GOODS_RATIO_MEAN"] = g["PREV_CREDIT_GOODS_RATIO_ROW"].mean()
+    out["PREV_RECENT_365_COUNT"] = g["PREV_RECENT_365_FLAG"].sum()
+    out["PREV_RECENT_365_REFUSAL_RATE"] = g["PREV_RECENT_365_REFUSED_FLAG"].mean()
+    out["PREV_RECENT_365_APP_CREDIT_RATIO_MEAN"] = g["PREV_RECENT_365_APP_CREDIT_RATIO"].mean()
+    last_idx = prev.groupby("SK_ID_CURR")["DAYS_DECISION"].idxmax()
+    last_rows = prev.loc[
+        last_idx,
+        ["SK_ID_CURR", "PREV_REFUSED_FLAG", "PREV_APP_CREDIT_RATIO_ROW"],
+    ].rename(
+        columns={
+            "PREV_REFUSED_FLAG": "PREV_LAST_REFUSED_FLAG",
+            "PREV_APP_CREDIT_RATIO_ROW": "PREV_LAST_APP_CREDIT_RATIO",
+        }
+    )
+    out = out.reset_index().merge(last_rows, on="SK_ID_CURR", how="left", validate="one_to_one")
+    assert_unique_key(out, "SK_ID_CURR", "previous_app_agg")
+    return out
 
 
 def _normalize_child_merge_curr(df: pd.DataFrame, label: str) -> pd.DataFrame:
@@ -496,6 +584,26 @@ def _agg_installments(raw_dir: str) -> pd.DataFrame:
         safe_div(inst["AMT_PAYMENT"], inst["AMT_INSTALMENT"]),
         np.nan,
     )
+    inst["INST_UNDERPAY_FLAG"] = np.where(
+        inst["INST_PAYMENT_RATIO"].notna(),
+        (inst["INST_PAYMENT_RATIO"] < 0.98).astype("int8"),
+        np.nan,
+    )
+    inst["INST_SEVERE_DPD_FLAG"] = np.where(
+        inst["INST_DPD"].notna(),
+        (inst["INST_DPD"] >= 30).astype("int8"),
+        np.nan,
+    )
+    inst["INST_RECENT_365_DPD"] = np.where(
+        inst["DAYS_INSTALMENT"] >= -365,
+        inst["INST_DPD"],
+        np.nan,
+    )
+    inst["INST_RECENT_365_PAYMENT_RATIO"] = np.where(
+        inst["DAYS_INSTALMENT"] >= -365,
+        inst["INST_PAYMENT_RATIO"],
+        np.nan,
+    )
     g = inst.groupby("SK_ID_CURR")
     out = pd.DataFrame(index=g.size().index)
     out["INST_RECORD_COUNT"] = g.size()
@@ -505,6 +613,12 @@ def _agg_installments(raw_dir: str) -> pd.DataFrame:
     out["INST_PAYMENT_RATIO_MEAN"] = g["INST_PAYMENT_RATIO"].mean()
     out["INST_PAYMENT_RATIO_MIN"] = g["INST_PAYMENT_RATIO"].min()
     out["INST_LATE_COUNT"] = g["INST_DPD"].apply(lambda s: (s > 0).sum())
+    out["INST_PAYMENT_RATIO_STD"] = g["INST_PAYMENT_RATIO"].std()
+    out["INST_UNDERPAY_RATE"] = g["INST_UNDERPAY_FLAG"].mean()
+    out["INST_SEVERE_DPD_RATE"] = g["INST_SEVERE_DPD_FLAG"].mean()
+    out["INST_RECENT_365_DPD_MEAN"] = g["INST_RECENT_365_DPD"].mean()
+    out["INST_RECENT_365_DPD_MAX"] = g["INST_RECENT_365_DPD"].max()
+    out["INST_RECENT_365_PAYMENT_RATIO_MEAN"] = g["INST_RECENT_365_PAYMENT_RATIO"].mean()
     result = out.reset_index()
     assert_unique_key(result, "SK_ID_CURR", "installments_agg")
     return result
@@ -594,12 +708,27 @@ def _select_application_frame(df: pd.DataFrame, require_sk_id_curr: bool) -> pd.
     return df[cols].copy()
 
 
-def _merge_full_aggregates(base_df: pd.DataFrame, raw_dir: str) -> pd.DataFrame:
-    merged = safe_left_merge_one_to_one(base_df, _agg_bureau(raw_dir), "SK_ID_CURR", "bureau_agg")
-    merged = safe_left_merge_one_to_one(merged, _agg_previous(raw_dir), "SK_ID_CURR", "previous_app_agg")
-    merged = safe_left_merge_one_to_one(merged, _agg_installments(raw_dir), "SK_ID_CURR", "installments_agg")
-    merged = safe_left_merge_one_to_one(merged, _agg_pos_cash(raw_dir), "SK_ID_CURR", "pos_cash_agg")
-    return safe_left_merge_one_to_one(merged, _agg_credit_card(raw_dir), "SK_ID_CURR", "credit_card_agg")
+def _merge_full_aggregates(
+    base_df: pd.DataFrame,
+    raw_dir: str,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
+) -> pd.DataFrame:
+    _, families, _ = resolve_full_feature_view(feature_view)
+    merged = base_df
+    family_frames: list[tuple[str, pd.DataFrame]] = []
+    if "BUREAU" in families:
+        family_frames.append(("bureau_agg", _agg_bureau(raw_dir)))
+    if "PREVIOUS_APPLICATION" in families:
+        family_frames.append(("previous_app_agg", _agg_previous(raw_dir)))
+    if "INSTALLMENTS" in families:
+        family_frames.append(("installments_agg", _agg_installments(raw_dir)))
+    if "POS_CASH" in families:
+        family_frames.append(("pos_cash_agg", _agg_pos_cash(raw_dir)))
+    if "CREDIT_CARD" in families:
+        family_frames.append(("credit_card_agg", _agg_credit_card(raw_dir)))
+    for feat_name, feat_df in family_frames:
+        merged = safe_left_merge_one_to_one(merged, feat_df, "SK_ID_CURR", feat_name)
+    return merged
 
 
 def _build_pre_model_frame(
@@ -607,15 +736,20 @@ def _build_pre_model_frame(
     tier: str,
     raw_dir: str | None = None,
     allow_flattened_full_input: bool = True,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> pd.DataFrame:
     tier = tier.upper()
-    has_any_aggs = any(c in df.columns for c in ALL_AGGREGATE_FEATURE_COLS)
+    selected_agg_cols: list[str] = []
+    has_any_aggs = False
+    if tier == "FULL":
+        _, _, selected_agg_cols = resolve_full_feature_view(feature_view)
+        has_any_aggs = any(c in df.columns for c in selected_agg_cols)
     use_flat_aggs = tier == "FULL" and allow_flattened_full_input and has_any_aggs
     base = _select_application_frame(df, require_sk_id_curr=(tier == "FULL" and not use_flat_aggs))
     base = _engineer_application_features(base)
     if tier == "FULL":
         if use_flat_aggs:
-            flat_agg_cols = [c for c in ALL_AGGREGATE_FEATURE_COLS if c in df.columns]
+            flat_agg_cols = [c for c in selected_agg_cols if c in df.columns]
             base = pd.concat(
                 [base.reset_index(drop=True), df[flat_agg_cols].reset_index(drop=True)],
                 axis=1,
@@ -623,7 +757,7 @@ def _build_pre_model_frame(
         else:
             if raw_dir is None:
                 raise ValueError("FULL transform requires flattened aggregate columns or raw_dir with SK_ID_CURR")
-            base = _merge_full_aggregates(base, raw_dir)
+            base = _merge_full_aggregates(base, raw_dir, feature_view=feature_view)
     if "SK_ID_CURR" in base.columns:
         base = base.drop(columns=["SK_ID_CURR"])
     fairness_cols = [c for c in FAIRNESS_ONLY_COLS if c in base.columns]
@@ -700,6 +834,7 @@ def _fit_builder_from_pre_model_frame(
     dataset_fingerprint: str | None = None,
     fit_split_name: str = "train",
     processed_manifest_fingerprint: str | None = None,
+    aggregate_contract_version: str = AGGREGATE_CONTRACT_VERSION,
 ) -> FrozenFeatureBuilder:
     train = train_pre_model_df.copy()
     categorical_cols = [c for c in CATEGORICAL_MODEL_COLS if c in train.columns]
@@ -734,7 +869,7 @@ def _fit_builder_from_pre_model_frame(
         dataset_fingerprint_=dataset_fingerprint or dataframe_fingerprint(train_pre_model_df),
         processed_manifest_fingerprint_=processed_manifest_fingerprint,
         feature_engineering_version_=FEATURE_ENGINEERING_VERSION,
-        aggregate_contract_version_=AGGREGATE_CONTRACT_VERSION,
+        aggregate_contract_version_=aggregate_contract_version,
     )
 
 
@@ -743,14 +878,23 @@ def fit_full_builder(
     raw_dir: str = "data/raw/",
     save_path: str | None = None,
     processed_manifest_path: str | None = None,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> FrozenFeatureBuilder:
+    view_name, _, aggregate_feature_cols = resolve_full_feature_view(feature_view)
     builder = _fit_builder_from_pre_model_frame(
-        _build_pre_model_frame(train_df, "FULL", raw_dir=raw_dir, allow_flattened_full_input=False),
+        _build_pre_model_frame(
+            train_df,
+            "FULL",
+            raw_dir=raw_dir,
+            allow_flattened_full_input=False,
+            feature_view=view_name,
+        ),
         "FULL",
-        ALL_AGGREGATE_FEATURE_COLS,
+        aggregate_feature_cols,
         dataset_fingerprint=dataframe_fingerprint(train_df),
         fit_split_name="train",
         processed_manifest_fingerprint=_load_processed_manifest_fingerprint(processed_manifest_path),
+        aggregate_contract_version=_aggregate_contract_version_for_view(view_name, aggregate_feature_cols),
     )
     if save_path is not None:
         builder.save(save_path)
@@ -810,8 +954,15 @@ def _transform_with_builder(
     builder: FrozenFeatureBuilder,
     for_linear_model: bool = False,
     raw_dir: str | None = None,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> pd.DataFrame:
-    pre_model = _build_pre_model_frame(df, builder.tier, raw_dir=raw_dir, allow_flattened_full_input=True)
+    pre_model = _build_pre_model_frame(
+        df,
+        builder.tier,
+        raw_dir=raw_dir,
+        allow_flattened_full_input=True,
+        feature_view=feature_view,
+    )
     pre_model = _align_pre_model_frame(pre_model, builder.pre_model_columns_)
     if builder.tier == "FULL" and raw_dir is None:
         for col, value in builder.numeric_imputers_.items():
@@ -837,9 +988,10 @@ def build_full(
     builder: FrozenFeatureBuilder,
     for_linear_model: bool = False,
     raw_dir: str | None = None,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> pd.DataFrame:
     _validate_builder(builder, "FULL")
-    return _transform_with_builder(df, builder, for_linear_model, raw_dir)
+    return _transform_with_builder(df, builder, for_linear_model, raw_dir, feature_view)
 
 
 def build_reduced(

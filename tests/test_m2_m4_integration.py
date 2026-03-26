@@ -184,11 +184,52 @@ def test_full_builder_accepts_public_api_flattened_payload_when_offline_bureau_f
 
     flat_df = build_input_df(payload, "FULL")
     assert "BB_MAX_STATUS_MEAN" not in flat_df.columns
+    assert "INST_RECENT_365_DPD_MAX" not in flat_df.columns
+    assert "PREV_LAST_APP_CREDIT_RATIO" not in flat_df.columns
 
     transformed = build_full(flat_df, builder, raw_dir=None)
 
     assert list(transformed.columns) == builder.encoded_columns_
     assert transformed["BB_MAX_STATUS_MEAN"].notna().all()
+    assert transformed["INST_RECENT_365_DPD_MAX"].notna().all()
+    assert transformed["PREV_LAST_APP_CREDIT_RATIO"].notna().all()
+
+
+def test_full_builder_feature_views_exclude_expected_family_columns(tmp_path):
+    from src.feature_engineering import build_full, fit_full_builder
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [310001, 310002, 310003, 310004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+
+    default_builder = fit_full_builder(train_df, raw_dir=str(raw_dir), save_path=None)
+    no_cc_builder = fit_full_builder(
+        train_df,
+        raw_dir=str(raw_dir),
+        save_path=None,
+        feature_view="FULL_NO_CREDIT_CARD",
+    )
+    no_bureau_builder = fit_full_builder(
+        train_df,
+        raw_dir=str(raw_dir),
+        save_path=None,
+        feature_view="FULL_NO_BUREAU",
+    )
+
+    assert any(col.startswith("CC_") for col in default_builder.aggregate_feature_cols_)
+    assert not any(col.startswith("CC_") for col in no_cc_builder.aggregate_feature_cols_)
+    assert any(col.startswith("BUREAU_") or col.startswith("BB_") for col in default_builder.aggregate_feature_cols_)
+    assert not any(col.startswith("BUREAU_") or col.startswith("BB_") for col in no_bureau_builder.aggregate_feature_cols_)
+
+    transformed_no_cc = build_full(train_df, no_cc_builder, raw_dir=str(raw_dir), feature_view="FULL_NO_CREDIT_CARD")
+    transformed_no_bureau = build_full(train_df, no_bureau_builder, raw_dir=str(raw_dir), feature_view="FULL_NO_BUREAU")
+
+    assert list(transformed_no_cc.columns) == no_cc_builder.encoded_columns_
+    assert list(transformed_no_bureau.columns) == no_bureau_builder.encoded_columns_
+    assert "CC_BALANCE_MEAN" not in transformed_no_cc.columns
+    assert "BUREAU_LOAN_COUNT" not in transformed_no_bureau.columns
+    assert "BB_MAX_STATUS_MEAN" not in transformed_no_bureau.columns
 
 
 def test_fit_full_builder_is_pure_without_save_path(tmp_path):

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,10 +40,11 @@ from configs.config import (
     RANDOM_STATE,
 )
 from src.feature_engineering import (
-    ALL_AGGREGATE_FEATURE_COLS,
+    DEFAULT_FULL_FEATURE_VIEW,
     FORBIDDEN_COLS,
     FULL_FEATURE_BUILDER_ARTIFACT_PATH,
     REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
+    _aggregate_contract_version_for_view,
     _agg_bureau,
     _agg_credit_card,
     _agg_installments,
@@ -53,6 +55,7 @@ from src.feature_engineering import (
     build_full,
     build_reduced,
     fit_reduced_builder,
+    resolve_full_feature_view,
 )
 from src.models.runtime_support import LogisticProbabilityCalibrator, TreeShapExplainer
 from src.runtime_verification import (
@@ -387,21 +390,25 @@ def _fit_full_builder_from_flattened(
     source_df: pd.DataFrame | None = None,
     save_path: str | None = None,
     processed_manifest_fingerprint: str | None = None,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ):
     source_frame = source_df if source_df is not None else train_df
+    view_name, _, aggregate_feature_cols = resolve_full_feature_view(feature_view)
     train_pre_model_df = _build_pre_model_frame(
         train_df,
         "FULL",
         raw_dir=None,
         allow_flattened_full_input=True,
+        feature_view=view_name,
     )
     builder = _fit_builder_from_pre_model_frame(
         train_pre_model_df,
         "FULL",
-        ALL_AGGREGATE_FEATURE_COLS,
+        aggregate_feature_cols,
         dataset_fingerprint=dataframe_fingerprint(source_frame),
         fit_split_name="train",
         processed_manifest_fingerprint=processed_manifest_fingerprint,
+        aggregate_contract_version=_aggregate_contract_version_for_view(view_name, aggregate_feature_cols),
     )
     if save_path is not None:
         builder.save(save_path)
@@ -421,21 +428,28 @@ def _fit_reduced_builder_from_application(
     )
 
 
-def _build_cached_full_frames(bundle: DatasetBundle) -> dict[str, pd.DataFrame]:
+def _build_cached_full_frames(
+    bundle: DatasetBundle,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
+) -> dict[str, pd.DataFrame]:
     assert bundle.raw_dir is not None, "Real FULL training requires raw_dir"
 
-    bureau = _agg_bureau(bundle.raw_dir)
-    previous = _agg_previous(bundle.raw_dir)
-    installments = _agg_installments(bundle.raw_dir)
-    pos_cash = _agg_pos_cash(bundle.raw_dir)
-    credit_card = _agg_credit_card(bundle.raw_dir)
+    _, families, _ = resolve_full_feature_view(feature_view)
+    family_frames: list[pd.DataFrame] = []
+    if "BUREAU" in families:
+        family_frames.append(_agg_bureau(bundle.raw_dir))
+    if "PREVIOUS_APPLICATION" in families:
+        family_frames.append(_agg_previous(bundle.raw_dir))
+    if "INSTALLMENTS" in families:
+        family_frames.append(_agg_installments(bundle.raw_dir))
+    if "POS_CASH" in families:
+        family_frames.append(_agg_pos_cash(bundle.raw_dir))
+    if "CREDIT_CARD" in families:
+        family_frames.append(_agg_credit_card(bundle.raw_dir))
 
-    all_aggs = (
-        bureau.merge(previous, on="SK_ID_CURR", how="outer")
-        .merge(installments, on="SK_ID_CURR", how="outer")
-        .merge(pos_cash, on="SK_ID_CURR", how="outer")
-        .merge(credit_card, on="SK_ID_CURR", how="outer")
-    )
+    all_aggs = family_frames[0]
+    for feat_df in family_frames[1:]:
+        all_aggs = all_aggs.merge(feat_df, on="SK_ID_CURR", how="outer")
 
     def attach(split_df: pd.DataFrame) -> pd.DataFrame:
         return split_df.merge(all_aggs, on="SK_ID_CURR", how="left", validate="one_to_one")
@@ -452,6 +466,7 @@ def _build_features(
     bundle: DatasetBundle,
     artifact_dir: str,
     processed_dir: str,
+    full_feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ):
     processed_manifest_path = _processed_manifest_path(processed_dir)
     reduced_builder = _fit_reduced_builder_from_application(
@@ -471,23 +486,25 @@ def _build_features(
             source_df=bundle.train,
             save_path=_builder_artifact_path(artifact_dir, "FULL"),
             processed_manifest_fingerprint=processed_manifest_fingerprint,
+            feature_view=full_feature_view,
         )
-        train_full = build_full(bundle.train, full_builder)
-        val_model_full = build_full(bundle.val_model, full_builder)
-        val_policy_full = build_full(bundle.val_policy, full_builder)
-        test_full = build_full(bundle.test, full_builder)
+        train_full = build_full(bundle.train, full_builder, feature_view=full_feature_view)
+        val_model_full = build_full(bundle.val_model, full_builder, feature_view=full_feature_view)
+        val_policy_full = build_full(bundle.val_policy, full_builder, feature_view=full_feature_view)
+        test_full = build_full(bundle.test, full_builder, feature_view=full_feature_view)
     else:
-        full_frames = _build_cached_full_frames(bundle)
+        full_frames = _build_cached_full_frames(bundle, full_feature_view)
         full_builder = _fit_full_builder_from_flattened(
             full_frames["train"],
             source_df=bundle.train,
             save_path=_builder_artifact_path(artifact_dir, "FULL"),
             processed_manifest_fingerprint=processed_manifest_fingerprint,
+            feature_view=full_feature_view,
         )
-        train_full = build_full(full_frames["train"], full_builder)
-        val_model_full = build_full(full_frames["val_model"], full_builder)
-        val_policy_full = build_full(full_frames["val_policy"], full_builder)
-        test_full = build_full(full_frames["test"], full_builder)
+        train_full = build_full(full_frames["train"], full_builder, feature_view=full_feature_view)
+        val_model_full = build_full(full_frames["val_model"], full_builder, feature_view=full_feature_view)
+        val_policy_full = build_full(full_frames["val_policy"], full_builder, feature_view=full_feature_view)
+        test_full = build_full(full_frames["test"], full_builder, feature_view=full_feature_view)
 
     for frame_name, frame, builder in [
         ("train_full", train_full, full_builder),
@@ -693,6 +710,7 @@ def train_models(
     artifact_dir: str = ARTIFACT_DIR,
     processed_dir: str = DATA_DIR,
     raw_dir: str = "data/raw/",
+    full_feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> dict[str, Any]:
     os.makedirs(artifact_dir, exist_ok=True)
 
@@ -701,7 +719,7 @@ def train_models(
     else:
         bundle = _generate_synthetic_bundle()
 
-    features = _build_features(bundle, artifact_dir, processed_dir)
+    features = _build_features(bundle, artifact_dir, processed_dir, full_feature_view=full_feature_view)
     y_train = bundle.train["TARGET"].to_numpy(dtype=int)
     y_val_model = bundle.val_model["TARGET"].to_numpy(dtype=int)
     y_val_policy = bundle.val_policy["TARGET"].to_numpy(dtype=int)
@@ -755,6 +773,8 @@ def train_models(
             "FULL": {
                 "model_family": "xgboost",
                 "model_version": MODEL_VERSIONS["full"],
+                "feature_view": full_feature_view,
+                "feature_count": int(len(features["full_builder"].encoded_columns_)),
                 "metrics": full_result["metrics"],
                 "selection": {
                     "candidate": full_result["selected_candidate"],
@@ -773,6 +793,7 @@ def train_models(
             "REDUCED": {
                 "model_family": "xgboost",
                 "model_version": MODEL_VERSIONS["reduced"],
+                "feature_count": int(len(features["reduced_builder"].encoded_columns_)),
                 "metrics": reduced_result["metrics"],
                 "selection": {
                     "candidate": reduced_result["selected_candidate"],
@@ -804,6 +825,74 @@ def train_models(
     report["report_path"] = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
     _write_reproducibility_report(artifact_dir, report)
     return report
+
+
+def run_feature_view_ablations(
+    processed_dir: str = DATA_DIR,
+    raw_dir: str = "data/raw/",
+) -> dict[str, Any]:
+    if not _has_real_training_inputs(processed_dir, raw_dir):
+        raise RuntimeError("Feature-view ablations require real processed splits and raw aggregate tables.")
+
+    view_order = [
+        DEFAULT_FULL_FEATURE_VIEW,
+        "FULL_NO_CREDIT_CARD",
+        "FULL_NO_POS_CASH",
+        "FULL_NO_PREVIOUS_APPLICATION",
+        "FULL_NO_INSTALLMENTS",
+        "FULL_NO_BUREAU",
+    ]
+    for view_name in view_order:
+        resolve_full_feature_view(view_name)
+
+    results: dict[str, Any] = {
+        "processed_manifest_fingerprint": _processed_manifest_fingerprint(processed_dir),
+        "reduced": {},
+        "views": {},
+    }
+
+    with tempfile.TemporaryDirectory(prefix="feature_view_ablation_") as temp_root:
+        baseline_report = train_models(
+            artifact_dir=os.path.join(temp_root, DEFAULT_FULL_FEATURE_VIEW.lower()),
+            processed_dir=processed_dir,
+            raw_dir=raw_dir,
+            full_feature_view=DEFAULT_FULL_FEATURE_VIEW,
+        )
+        reduced_tier = baseline_report["tiers"]["REDUCED"]
+        results["reduced"] = {
+            "view": "REDUCED",
+            "roc_auc": float(reduced_tier["metrics"]["roc_auc"]),
+            "brier_score": float(reduced_tier["metrics"]["brier_score"]),
+            "feature_count": int(reduced_tier["feature_count"]),
+            "candidate": reduced_tier["selection"]["candidate"],
+            "val_model_roc_auc": float(reduced_tier["selection"]["val_model_roc_auc"]),
+        }
+        full_tier = baseline_report["tiers"]["FULL"]
+        results["views"][DEFAULT_FULL_FEATURE_VIEW] = {
+            "roc_auc": float(full_tier["metrics"]["roc_auc"]),
+            "brier_score": float(full_tier["metrics"]["brier_score"]),
+            "feature_count": int(full_tier["feature_count"]),
+            "candidate": full_tier["selection"]["candidate"],
+            "val_model_roc_auc": float(full_tier["selection"]["val_model_roc_auc"]),
+        }
+
+        for view_name in view_order[1:]:
+            report = train_models(
+                artifact_dir=os.path.join(temp_root, view_name.lower()),
+                processed_dir=processed_dir,
+                raw_dir=raw_dir,
+                full_feature_view=view_name,
+            )
+            tier = report["tiers"]["FULL"]
+            results["views"][view_name] = {
+                "roc_auc": float(tier["metrics"]["roc_auc"]),
+                "brier_score": float(tier["metrics"]["brier_score"]),
+                "feature_count": int(tier["feature_count"]),
+                "candidate": tier["selection"]["candidate"],
+                "val_model_roc_auc": float(tier["selection"]["val_model_roc_auc"]),
+            }
+
+    return results
 
 
 def _format_metric_line(label: str, metrics: dict[str, float]) -> str:
