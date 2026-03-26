@@ -3,7 +3,7 @@
 ### What this module does
 Loads 7 raw Home Credit CSVs, enforces an allowlist, applies 6
 data traps (sentinel removal, schema enforcement, income capping),
-sorts by proxy recency, splits 60/10/10/20, and serializes 5
+sorts by proxy staleness (oldest to newest), splits 60/10/10/20, and serializes 5
 DataFrames plus a scalar income_cap to disk.
 
 ### What it expects from other modules
@@ -32,3 +32,4 @@ from src.data_pipeline import (
    train.pkl — do not recreate them in Module 2.
 5. application_test.csv rows are in adv_train/adv_val only.
    They must never enter any scoring feature matrix.
+

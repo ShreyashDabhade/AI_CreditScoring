@@ -1,4 +1,4 @@
-﻿"""Module 1 â€” Data Pipeline.
+"""Module 1 — Data Pipeline.
 
 This module handles:
 - Data loading
@@ -107,7 +107,7 @@ def enforce_schema(df: pd.DataFrame, schema: dict[str, str]) -> pd.DataFrame:
 
 
 # ================================
-# TRAP D â€” MISSING POLICY FUNCTIONS
+# TRAP D — MISSING POLICY FUNCTIONS
 # ================================
 
 def fit_missing_policy(train_df: pd.DataFrame):
@@ -164,7 +164,7 @@ def apply_missing_policy(
 # ================================
 
 # ordered holdout using Home Credit recency proxies;
-# not true calendar-time validation
+# oldest rows first, newest rows last; not true calendar-time validation
 def proxy_recency_sort(app_df: pd.DataFrame) -> pd.DataFrame:
     tmp = app_df.copy()
 
@@ -177,7 +177,7 @@ def proxy_recency_sort(app_df: pd.DataFrame) -> pd.DataFrame:
 
     tmp = tmp.sort_values(
         ["__RECENCY_1", "__RECENCY_2", "SK_ID_CURR"],
-        ascending=[True, True, True]
+        ascending=[False, False, True]
     )
 
     tmp = tmp.drop(columns=["__RECENCY_1", "__RECENCY_2"])
@@ -323,7 +323,7 @@ if __name__ == "__main__":
     app_train = enforce_schema(app_train, TRAIN_SCHEMA)
 
     # ================================
-    # TRAP A â€” DAYS_EMPLOYED FIX
+    # TRAP A — DAYS_EMPLOYED FIX
     # ================================
     app_train["DAYS_EMPLOYED_ANOM"] = (
         app_train["DAYS_EMPLOYED"] == 365243
@@ -332,7 +332,7 @@ if __name__ == "__main__":
     app_train["DAYS_EMPLOYED"] = app_train["DAYS_EMPLOYED"].replace(365243, np.nan)
 
     # ================================
-    # TRAP B â€” PREV_APP FIX
+    # TRAP B — PREV_APP FIX
     # ================================
     for col in PREV_SENTINEL_DAY_COLS:
         if col in prev_app.columns:
@@ -340,20 +340,20 @@ if __name__ == "__main__":
             prev_app[col] = prev_app[col].replace(365243, np.nan)
 
     # ================================
-    # TRAP E â€” SCHEMA ASSERTION
+    # TRAP E — SCHEMA ASSERTION
     # ================================
     assert app_train["SK_ID_CURR"].dtype == np.int64, \
         "SK_ID_CURR dtype enforcement failed"
 
     # ================================
-    # STAGE 3 â€” SORT + SPLIT
+    # STAGE 3 — SORT + SPLIT
     # ================================
     app_sorted = proxy_recency_sort(app_train)
 
     train, val_model, val_policy, test = ordered_split_60_10_10_20(app_sorted)
 
     # ================================
-    # TRAP C â€” INCOME CAP
+    # TRAP C — INCOME CAP
     # ================================
     income_cap = train["AMT_INCOME_TOTAL"].quantile(0.99)
 
@@ -405,7 +405,7 @@ if __name__ == "__main__":
     assert abs(val_dist[0] - 0.5) < 0.05
     
     # ================================
-    # STAGE 4 â€” DIRECTORY SETUP
+    # STAGE 4 — DIRECTORY SETUP
     # ================================
 
     DATA_PROCESSED_DIR = os.environ.get(
@@ -495,7 +495,7 @@ if __name__ == "__main__":
     print("\nAll serialization checks passed.")
     
     # ================================
-    # STAGE 5 â€” EDA DIRECTORY
+    # STAGE 5 — EDA DIRECTORY
     # ================================
 
     EDA_PLOTS_DIR = os.environ.get(
@@ -504,7 +504,7 @@ if __name__ == "__main__":
 
     os.makedirs(EDA_PLOTS_DIR, exist_ok=True)
     
-    # Plot 1 â€” Target Distribution
+    # Plot 1 — Target Distribution
     
     fig, ax = plt.subplots(figsize=(6, 4))
     counts = train["TARGET"].value_counts().sort_index()
@@ -526,7 +526,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "target_distribution.png", dpi=150)
     plt.close()
     
-    # Plot 2 â€” Missing Heatmap
+    # Plot 2 — Missing Heatmap
     
     miss_rate = app_train.isna().mean().sort_values(ascending=False)
     miss_top = miss_rate[miss_rate > 0].head(40)
@@ -543,7 +543,7 @@ if __name__ == "__main__":
         cbar_kws={"label": "Missing rate"}
     )
 
-    ax.set_title("Missing value rates â€” application_train (top 40)")
+    ax.set_title("Missing value rates — application_train (top 40)")
     ax.set_xlabel("Column")
     plt.xticks(rotation=90, fontsize=7)
 
@@ -551,7 +551,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "missing_value_heatmap.png", dpi=150)
     plt.close()
     
-    #Plot 3 â€” Correlation
+    #Plot 3 — Correlation
     cols = ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3", "TARGET"]
     sub = train[cols].dropna()
     corr = sub.corr()
@@ -574,7 +574,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "ext_source_correlation.png", dpi=150)
     plt.close()
     
-    #Plot 4 â€” DAYS_EMPLOYED anomaly
+    #Plot 4 — DAYS_EMPLOYED anomaly
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     raw_vals = app_train["DAYS_EMPLOYED"].copy()
     raw_vals_with_sentinel = raw_vals.copy()
@@ -590,7 +590,7 @@ if __name__ == "__main__":
         edgecolor="none"
     )
 
-    axes[0].set_title("DAYS_EMPLOYED â€” with sentinel (365243)")
+    axes[0].set_title("DAYS_EMPLOYED — with sentinel (365243)")
 
     axes[1].hist(
         app_train["DAYS_EMPLOYED"].dropna(),
@@ -599,7 +599,7 @@ if __name__ == "__main__":
         edgecolor="none"
     )
 
-    axes[1].set_title("DAYS_EMPLOYED â€” after Trap A fix")
+    axes[1].set_title("DAYS_EMPLOYED — after Trap A fix")
 
     for ax in axes:
         ax.set_xlabel("Value")
@@ -611,7 +611,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "days_employed_anomaly.png", dpi=150)
     plt.close()
     
-    #Plot 5 â€” Income Outliers
+    #Plot 5 — Income Outliers
     
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].hist(
@@ -621,7 +621,7 @@ if __name__ == "__main__":
         edgecolor="none"
     )
 
-    axes[0].set_title("AMT_INCOME_TOTAL â€” raw (clipped at 2M)")
+    axes[0].set_title("AMT_INCOME_TOTAL — raw (clipped at 2M)")
 
     axes[1].hist(
         train["AMT_INCOME_TOTAL_CAPPED"].dropna(),
@@ -639,7 +639,7 @@ if __name__ == "__main__":
     )
 
     axes[1].legend(fontsize=9)
-    axes[1].set_title("AMT_INCOME_TOTAL â€” after Trap C cap")
+    axes[1].set_title("AMT_INCOME_TOTAL — after Trap C cap")
 
     for ax in axes:
         ax.set_xlabel("Value")
@@ -684,4 +684,5 @@ if __name__ == "__main__":
         json.dump(report, f, indent=2)
 
     print("data_quality_report.json saved")
+
 

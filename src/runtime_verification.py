@@ -1,4 +1,4 @@
-﻿"""Shared verification and lineage helpers for runtime artifacts."""
+"""Shared verification and lineage helpers for runtime artifacts."""
 
 from __future__ import annotations
 
@@ -178,15 +178,23 @@ def validate_processed_splits(splits: Mapping[str, pd.DataFrame]) -> dict[str, A
         raise ValueError("Processed splits do not share an identical schema")
 
     for left, right in zip(EXPECTED_PROCESSED_SPLITS, EXPECTED_PROCESSED_SPLITS[1:]):
-        left_recency = pd.to_numeric(splits[left]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
-        right_recency = pd.to_numeric(splits[right]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
-        if left_recency.empty or right_recency.empty:
-            continue
-        if float(left_recency.max()) > float(right_recency.min()):
-            raise ValueError(
-                "Proxy-time split ordering violated between "
-                f"{left} and {right} on DAYS_ID_PUBLISH"
-            )
+        left_publish = pd.to_numeric(splits[left]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
+        right_publish = pd.to_numeric(splits[right]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
+        if not left_publish.empty and not right_publish.empty:
+            if float(left_publish.min()) < float(right_publish.max()):
+                raise ValueError(
+                    "Proxy-time split ordering violated between "
+                    f"{left} and {right} on DAYS_ID_PUBLISH"
+                )
+
+        left_registration = pd.to_numeric(splits[left]["DAYS_REGISTRATION"], errors="coerce").abs().dropna()
+        right_registration = pd.to_numeric(splits[right]["DAYS_REGISTRATION"], errors="coerce").abs().dropna()
+        if not left_registration.empty and not right_registration.empty:
+            if float(left_registration.mean()) < float(right_registration.mean()):
+                raise ValueError(
+                    "Proxy-time split ordering violated between "
+                    f"{left} and {right} on DAYS_REGISTRATION mean"
+                )
 
     return {
         "duplicate_summary": duplicate_summary,
@@ -314,3 +322,5 @@ def validate_builder_artifact(
             )
 
     return {"warnings": warnings}
+
+
