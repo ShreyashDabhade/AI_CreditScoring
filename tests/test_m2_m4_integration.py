@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 
 import numpy as np
@@ -185,14 +185,12 @@ def test_full_builder_accepts_public_api_flattened_payload_when_offline_bureau_f
     flat_df = build_input_df(payload, "FULL")
     assert "BB_MAX_STATUS_MEAN" not in flat_df.columns
     assert "INST_RECENT_365_DPD_MAX" not in flat_df.columns
-    assert "PREV_LAST_APP_CREDIT_RATIO" not in flat_df.columns
 
     transformed = build_full(flat_df, builder, raw_dir=None)
 
     assert list(transformed.columns) == builder.encoded_columns_
     assert transformed["BB_MAX_STATUS_MEAN"].notna().all()
     assert transformed["INST_RECENT_365_DPD_MAX"].notna().all()
-    assert transformed["PREV_LAST_APP_CREDIT_RATIO"].notna().all()
 
 
 def test_full_builder_feature_views_exclude_expected_family_columns(tmp_path):
@@ -271,6 +269,9 @@ def test_m4_derives_pooled_groups_via_m2_contract(tmp_path, monkeypatch):
     assert "HOUSING_TYPE_POOLED" in result.columns
     assert set(result["INCOME_TYPE_POOLED"]) == {"OTHER"}
     assert set(result["HOUSING_TYPE_POOLED"]) == {"OTHER"}
+    assert result["FAIR_GROUP_PRIMARY"].tolist() == ["REGION_1", "REGION_2", "REGION_3"]
+    assert result["FAIR_GROUP_SECONDARY"].tolist() == ["INCOME_T1", "INCOME_T2", "INCOME_T3"]
+    assert result["FAIR_GROUP_TERTIARY"].str.contains("__").all()
 
 
 def test_m2_full_builder_and_m4_audit_flow(tmp_path, monkeypatch):
@@ -399,3 +400,5 @@ def test_builder_artifacts_strict_loader_validates_saved_builders(tmp_path):
 
     assert builders["FULL"].tier == "FULL"
     assert builders["REDUCED"].tier == "REDUCED"
+
+

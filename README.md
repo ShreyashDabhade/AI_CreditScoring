@@ -1,6 +1,6 @@
-# MasterMind Credit Scoring
+﻿# MasterMind Credit Scoring
 
-MasterMind is an explainable credit scoring system built on the Home Credit Default Risk dataset. Modules 1–4 are the offline pipeline: data preparation, frozen feature builders, model training/calibration, and fairness or explainability outputs. Module 5 is the Flask API and is the terminal consumer of that persisted artifact stack.
+MasterMind is an explainable credit scoring system built on the Home Credit Default Risk dataset. Modules 1â€“4 are the offline pipeline: data preparation, frozen feature builders, model training/calibration, and fairness or explainability outputs. Module 5 is the Flask API and is the terminal consumer of that persisted artifact stack.
 
 ## Workflow
 
@@ -205,9 +205,10 @@ Success response:
   "model_version": "reduced_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1",
   "calibrated": true,
   "model_fairness_audit_passed": true,
-  "fairness_audit_version": "proxy_audit_2026Q1_v1.0",
+  "fairness_audit_version": "proxy_audit_2026Q1_v1.1",
   "coverage_tier": "REDUCED"
 }
 ```
 
 `model_fairness_audit_passed` reflects the offline fairness artifact produced by Module 4. The API does not rerun fairness checks during live scoring.
+

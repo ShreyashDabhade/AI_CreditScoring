@@ -1,4 +1,4 @@
-"""Module 3 — Model Training.
+﻿"""Module 3 â€” Model Training.
 
 Trains a FULL scoring model, calibrates probabilities, persists artifacts
 for Module 5, and writes a reproducibility report.
@@ -24,7 +24,9 @@ if __package__ is None or __package__ == "":
 import joblib
 import numpy as np
 import pandas as pd
+from lightgbm import LGBMClassifier
 from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
@@ -57,7 +59,12 @@ from src.feature_engineering import (
     fit_reduced_builder,
     resolve_full_feature_view,
 )
-from src.models.runtime_support import LogisticProbabilityCalibrator, TreeShapExplainer
+from src.models.runtime_support import (
+    LogisticProbabilityCalibrator,
+    TreeShapExplainer,
+    WeightedBlendModel,
+    WeightedBlendShapExplainer,
+)
 from src.runtime_verification import (
     dataframe_fingerprint,
     load_json_object,
@@ -65,6 +72,7 @@ from src.runtime_verification import (
 )
 
 REPRODUCIBILITY_REPORT_FILENAME = "reproducibility_report.json"
+BLEND_EXPERIMENT_REPORT_FILENAME = "blend_experiment_report.json"
 FAIRNESS_RESULT_FILENAME = "model_fairness_audit_passed.joblib"
 PROCESSED_MANIFEST_FILENAME = "processed_artifact_manifest.json"
 RAW_TABLE_NAMES = [
@@ -74,6 +82,10 @@ RAW_TABLE_NAMES = [
     "POS_CASH_balance.csv",
     "credit_card_balance.csv",
 ]
+FULL_WEIGHTED_BLEND_MODEL_VERSION = "full_weighted_blend_v2.2.0"
+FULL_XGBOOST_CANDIDATE_PREFIX = "full_xgboost"
+FULL_WEIGHTED_BLEND_CANDIDATE_PREFIX = "full_weighted_blend"
+FULL_WEIGHTED_BLEND_METADATA_FILENAME = "full_weighted_blend_metadata.json"
 
 
 @dataclass
@@ -536,6 +548,55 @@ def _build_features(
     }
 
 
+def _candidate_lgbm_params(scale_pos_weight: float) -> list[tuple[str, dict[str, Any]]]:
+    baseline = {
+        "n_estimators": 220,
+        "num_leaves": 31,
+        "learning_rate": 0.05,
+        "subsample": 0.9,
+        "colsample_bytree": 0.9,
+        "reg_lambda": 1.0,
+        "min_child_samples": 60,
+        "scale_pos_weight": scale_pos_weight,
+    }
+    tuned_a = {
+        "n_estimators": 420,
+        "num_leaves": 31,
+        "learning_rate": 0.03,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 2.0,
+        "min_child_samples": 90,
+        "scale_pos_weight": scale_pos_weight,
+    }
+    tuned_b = {
+        "n_estimators": 360,
+        "num_leaves": 63,
+        "learning_rate": 0.04,
+        "subsample": 0.85,
+        "colsample_bytree": 0.75,
+        "reg_lambda": 3.0,
+        "min_child_samples": 120,
+        "scale_pos_weight": scale_pos_weight,
+    }
+    tuned_c = {
+        "n_estimators": 520,
+        "num_leaves": 63,
+        "learning_rate": 0.025,
+        "subsample": 0.8,
+        "colsample_bytree": 0.7,
+        "reg_lambda": 4.0,
+        "min_child_samples": 160,
+        "scale_pos_weight": scale_pos_weight,
+    }
+    return [
+        ("baseline", baseline),
+        ("tuned_a", tuned_a),
+        ("tuned_b", tuned_b),
+        ("tuned_c", tuned_c),
+    ]
+
+
 def _candidate_model_params(scale_pos_weight: float) -> list[tuple[str, dict[str, Any]]]:
     baseline = {
         "n_estimators": 160,
@@ -589,6 +650,16 @@ def _make_model(params: dict[str, Any]) -> XGBClassifier:
         random_state=RANDOM_STATE,
         eval_metric="auc",
         tree_method="hist",
+        **params,
+    )
+
+
+def _make_lgbm_model(params: dict[str, Any]) -> LGBMClassifier:
+    return LGBMClassifier(
+        objective="binary",
+        random_state=RANDOM_STATE,
+        n_jobs=-1,
+        verbosity=-1,
         **params,
     )
 
@@ -699,6 +770,516 @@ def _train_tier_model(
     }
 
 
+def _train_best_model_family(
+    model_family: str,
+    candidate_params: list[tuple[str, dict[str, Any]]],
+    train_X: pd.DataFrame,
+    train_y: np.ndarray,
+    val_model_X: pd.DataFrame,
+    val_model_y: np.ndarray,
+) -> dict[str, Any]:
+    best_model = None
+    best_name = ""
+    best_params: dict[str, Any] = {}
+    best_val_auc = float("-inf")
+    best_val_model_raw_pd: np.ndarray | None = None
+
+    for candidate_name, params in candidate_params:
+        if model_family == "xgboost":
+            model = _make_model(params)
+            model.fit(train_X, train_y, eval_set=[(val_model_X, val_model_y)], verbose=False)
+            val_model_raw_pd = model.predict_proba(val_model_X)[:, 1]
+        elif model_family == "lightgbm":
+            model = _make_lgbm_model(params)
+            train_matrix = train_X.to_numpy(dtype=float)
+            val_model_matrix = val_model_X.to_numpy(dtype=float)
+            model.fit(train_matrix, train_y)
+            val_model_raw_pd = model.predict_proba(val_model_matrix)[:, 1]
+        else:
+            raise ValueError(f"Unsupported model family: {model_family}")
+        val_auc = float(roc_auc_score(val_model_y, val_model_raw_pd))
+        if val_auc > best_val_auc:
+            best_model = model
+            best_name = candidate_name
+            best_params = params
+            best_val_auc = val_auc
+            best_val_model_raw_pd = val_model_raw_pd
+
+    assert best_model is not None and best_val_model_raw_pd is not None
+    return {
+        "model": best_model,
+        "selected_candidate": best_name,
+        "selected_params": best_params,
+        "val_model_roc_auc": best_val_auc,
+        "val_model_raw_pd": best_val_model_raw_pd,
+    }
+
+
+def _evaluate_calibrated_scores(
+    val_policy_y: np.ndarray,
+    val_policy_raw_pd: np.ndarray,
+    test_y: np.ndarray,
+    test_raw_pd: np.ndarray,
+) -> dict[str, Any]:
+    calibrator, calibrator_name, calibrator_metrics = _select_calibrator(val_policy_y, val_policy_raw_pd)
+    test_calibrated_pd = calibrator.predict(test_raw_pd)
+    return {
+        "calibrator": calibrator,
+        "selected_calibrator": calibrator_name,
+        "val_policy_calibration_metrics": calibrator_metrics,
+        "metrics": _collect_metrics(test_y, test_calibrated_pd),
+    }
+
+
+def _select_weighted_average_blend(
+    y_true: np.ndarray,
+    pred_xgb: np.ndarray,
+    pred_lgbm: np.ndarray,
+    weights: np.ndarray | None = None,
+) -> dict[str, Any]:
+    weight_grid = np.linspace(0.0, 1.0, 21) if weights is None else np.asarray(weights, dtype=float)
+    best_weight = 0.0
+    best_auc = float("-inf")
+    best_pred = pred_lgbm
+    for weight in weight_grid:
+        blended = weight * pred_xgb + (1.0 - weight) * pred_lgbm
+        auc = float(roc_auc_score(y_true, blended))
+        if auc > best_auc:
+            best_auc = auc
+            best_weight = float(weight)
+            best_pred = blended
+    return {
+        "weight_xgb": best_weight,
+        "weight_lgbm": float(1.0 - best_weight),
+        "val_model_roc_auc": best_auc,
+        "val_model_raw_pd": best_pred,
+    }
+
+
+def _fit_logistic_meta_blend(
+    y_true: np.ndarray,
+    pred_xgb: np.ndarray,
+    pred_lgbm: np.ndarray,
+) -> dict[str, Any]:
+    meta_X = np.column_stack([pred_xgb, pred_lgbm])
+    meta = LogisticRegression(solver="liblinear", random_state=RANDOM_STATE)
+    meta.fit(meta_X, y_true)
+    raw_pd = meta.predict_proba(meta_X)[:, 1]
+    return {
+        "meta_model": meta,
+        "val_model_roc_auc": float(roc_auc_score(y_true, raw_pd)),
+        "val_model_raw_pd": raw_pd,
+    }
+
+
+def _predict_lightgbm_raw_pd(model: Any, X: pd.DataFrame | np.ndarray) -> np.ndarray:
+    matrix = X.to_numpy(dtype=float, copy=False) if hasattr(X, "to_numpy") else np.asarray(X, dtype=float)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(1, -1)
+    return np.asarray(model.predict_proba(matrix), dtype=float)[:, 1]
+
+
+def _persist_runtime_bundle(
+    artifact_dir: str,
+    prefix: str,
+    *,
+    model: Any,
+    calibrator: Any,
+    explainer: Any,
+) -> dict[str, str]:
+    paths = {
+        "model": _artifact_path(artifact_dir, f"{prefix}_model.joblib"),
+        "calibrator": _artifact_path(artifact_dir, f"{prefix}_calibrator.joblib"),
+        "explainer": _artifact_path(artifact_dir, f"{prefix}_shap_explainer.joblib"),
+    }
+    joblib.dump(model, paths["model"])
+    joblib.dump(calibrator, paths["calibrator"])
+    joblib.dump(explainer, paths["explainer"])
+    return paths
+
+
+def _write_json_artifact(artifact_dir: str, filename: str, payload: dict[str, Any]) -> str:
+    path = _artifact_path(artifact_dir, filename)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    return path
+
+
+def _train_full_runtime_candidate(
+    train_X: pd.DataFrame,
+    train_y: np.ndarray,
+    val_model_X: pd.DataFrame,
+    val_model_y: np.ndarray,
+    val_policy_X: pd.DataFrame,
+    val_policy_y: np.ndarray,
+    test_X: pd.DataFrame,
+    test_y: np.ndarray,
+    artifact_dir: str,
+    *,
+    full_feature_view: str,
+    processed_manifest_fingerprint: str | None,
+) -> dict[str, Any]:
+    pos = int(train_y.sum())
+    neg = int(len(train_y) - pos)
+    scale_pos_weight = float(neg / max(pos, 1))
+
+    xgb_result = _train_best_model_family(
+        "xgboost",
+        _candidate_model_params(scale_pos_weight),
+        train_X,
+        train_y,
+        val_model_X,
+        val_model_y,
+    )
+    lgbm_result = _train_best_model_family(
+        "lightgbm",
+        _candidate_lgbm_params(scale_pos_weight),
+        train_X,
+        train_y,
+        val_model_X,
+        val_model_y,
+    )
+
+    xgb_val_policy_raw = xgb_result["model"].predict_proba(val_policy_X)[:, 1]
+    xgb_test_raw = xgb_result["model"].predict_proba(test_X)[:, 1]
+    lgbm_val_policy_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], val_policy_X)
+    lgbm_test_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], test_X)
+
+    xgb_eval = _evaluate_calibrated_scores(val_policy_y, xgb_val_policy_raw, test_y, xgb_test_raw)
+    weighted = _select_weighted_average_blend(
+        val_model_y,
+        xgb_result["val_model_raw_pd"],
+        lgbm_result["val_model_raw_pd"],
+    )
+    weighted_model = WeightedBlendModel(
+        xgb_result["model"],
+        lgbm_result["model"],
+        weight_xgboost=float(weighted["weight_xgb"]),
+        weight_lightgbm=float(weighted["weight_lgbm"]),
+        feature_count=int(train_X.shape[1]),
+    )
+    weighted_val_policy_raw = weighted_model.predict_raw_pd(val_policy_X)
+    weighted_test_raw = weighted_model.predict_raw_pd(test_X)
+    weighted_eval = _evaluate_calibrated_scores(
+        val_policy_y,
+        weighted_val_policy_raw,
+        test_y,
+        weighted_test_raw,
+    )
+
+    xgb_explainer = TreeShapExplainer(xgb_result["model"])
+    lgbm_explainer = TreeShapExplainer(lgbm_result["model"])
+    weighted_explainer = WeightedBlendShapExplainer(
+        xgb_explainer,
+        lgbm_explainer,
+        weight_xgboost=float(weighted["weight_xgb"]),
+        weight_lightgbm=float(weighted["weight_lgbm"]),
+    )
+
+    xgb_candidate_artifacts = _persist_runtime_bundle(
+        artifact_dir,
+        FULL_XGBOOST_CANDIDATE_PREFIX,
+        model=xgb_result["model"],
+        calibrator=xgb_eval["calibrator"],
+        explainer=xgb_explainer,
+    )
+    weighted_candidate_artifacts = _persist_runtime_bundle(
+        artifact_dir,
+        FULL_WEIGHTED_BLEND_CANDIDATE_PREFIX,
+        model=weighted_model,
+        calibrator=weighted_eval["calibrator"],
+        explainer=weighted_explainer,
+    )
+
+    xgb_candidate = {
+        "model_family": "xgboost",
+        "model_version": MODEL_VERSIONS["full"],
+        "selected_candidate": xgb_result["selected_candidate"],
+        "selected_params": xgb_result["selected_params"],
+        "val_model_roc_auc": float(xgb_result["val_model_roc_auc"]),
+        "test_metrics": xgb_eval["metrics"],
+        "selected_calibrator": xgb_eval["selected_calibrator"],
+        "val_policy_calibration_metrics": xgb_eval["val_policy_calibration_metrics"],
+        "artifacts": xgb_candidate_artifacts,
+        "explanation_policy": "tree_shap",
+    }
+    lightgbm_component = {
+        "model_family": "lightgbm",
+        "selected_candidate": lgbm_result["selected_candidate"],
+        "selected_params": lgbm_result["selected_params"],
+        "val_model_roc_auc": float(lgbm_result["val_model_roc_auc"]),
+        "test_metrics": _evaluate_calibrated_scores(
+            val_policy_y,
+            lgbm_val_policy_raw,
+            test_y,
+            lgbm_test_raw,
+        )["metrics"],
+    }
+    weighted_candidate = {
+        "model_family": "weighted_blend",
+        "model_version": FULL_WEIGHTED_BLEND_MODEL_VERSION,
+        "blend_method": "weighted_average",
+        "weights": {
+            "xgboost": float(weighted["weight_xgb"]),
+            "lightgbm": float(weighted["weight_lgbm"]),
+        },
+        "val_model_roc_auc": float(weighted["val_model_roc_auc"]),
+        "test_metrics": weighted_eval["metrics"],
+        "selected_calibrator": weighted_eval["selected_calibrator"],
+        "val_policy_calibration_metrics": weighted_eval["val_policy_calibration_metrics"],
+        "component_selection": {
+            "xgboost": {
+                "candidate": xgb_result["selected_candidate"],
+                "params": xgb_result["selected_params"],
+            },
+            "lightgbm": {
+                "candidate": lgbm_result["selected_candidate"],
+                "params": lgbm_result["selected_params"],
+            },
+        },
+        "artifacts": weighted_candidate_artifacts,
+        "explanation_policy": weighted_explainer.explanation_policy,
+    }
+
+    selected_candidate = "weighted_blend_full" if weighted_candidate["val_model_roc_auc"] > xgb_candidate["val_model_roc_auc"] else "xgboost_full"
+    if selected_candidate == "weighted_blend_full":
+        selected_model = weighted_model
+        selected_calibrator = weighted_eval["calibrator"]
+        selected_explainer = weighted_explainer
+        selected_metrics = weighted_eval["metrics"]
+        selected_model_family = "weighted_blend"
+        selected_model_version = FULL_WEIGHTED_BLEND_MODEL_VERSION
+        selected_val_model_roc_auc = float(weighted_candidate["val_model_roc_auc"])
+        selected_calibrator_name = weighted_eval["selected_calibrator"]
+        selected_calibration_metrics = weighted_eval["val_policy_calibration_metrics"]
+    else:
+        selected_model = xgb_result["model"]
+        selected_calibrator = xgb_eval["calibrator"]
+        selected_explainer = xgb_explainer
+        selected_metrics = xgb_eval["metrics"]
+        selected_model_family = "xgboost"
+        selected_model_version = MODEL_VERSIONS["full"]
+        selected_val_model_roc_auc = float(xgb_candidate["val_model_roc_auc"])
+        selected_calibrator_name = xgb_eval["selected_calibrator"]
+        selected_calibration_metrics = xgb_eval["val_policy_calibration_metrics"]
+
+    selected_runtime_artifacts = _persist_runtime_bundle(
+        artifact_dir,
+        "full",
+        model=selected_model,
+        calibrator=selected_calibrator,
+        explainer=selected_explainer,
+    )
+
+    blend_metadata = {
+        "processed_manifest_fingerprint": processed_manifest_fingerprint,
+        "feature_view": full_feature_view,
+        "blend_method": "weighted_average",
+        "model_version": FULL_WEIGHTED_BLEND_MODEL_VERSION,
+        "weights": weighted_candidate["weights"],
+        "component_candidates": weighted_candidate["component_selection"],
+        "selected_runtime_candidate": selected_candidate,
+        "selected_runtime_model_version": selected_model_version,
+        "selected_runtime_artifacts": selected_runtime_artifacts,
+        "fallback_xgboost_artifacts": xgb_candidate_artifacts,
+        "weighted_blend_artifacts": weighted_candidate_artifacts,
+        "xgboost_candidate": xgb_candidate,
+        "lightgbm_component": lightgbm_component,
+        "weighted_blend_candidate": weighted_candidate,
+        "explanation_policy": weighted_explainer.explanation_policy,
+    }
+    blend_metadata_path = _write_json_artifact(
+        artifact_dir,
+        FULL_WEIGHTED_BLEND_METADATA_FILENAME,
+        blend_metadata,
+    )
+
+    return {
+        "model": selected_model,
+        "calibrator": selected_calibrator,
+        "metrics": selected_metrics,
+        "selected_candidate": selected_candidate,
+        "selected_model_family": selected_model_family,
+        "selected_model_version": selected_model_version,
+        "val_model_roc_auc": selected_val_model_roc_auc,
+        "selected_calibrator": selected_calibrator_name,
+        "val_policy_calibration_metrics": selected_calibration_metrics,
+        "artifacts": selected_runtime_artifacts,
+        "fallback_xgboost_artifacts": xgb_candidate_artifacts,
+        "blend_metadata_path": blend_metadata_path,
+        "candidates": {
+            "xgboost_full": xgb_candidate,
+            "lightgbm_component_full": lightgbm_component,
+            "weighted_blend_full": weighted_candidate,
+        },
+    }
+
+
+def _write_blend_experiment_report(artifact_dir: str, report: dict[str, Any]) -> str:
+    path = _artifact_path(artifact_dir, BLEND_EXPERIMENT_REPORT_FILENAME)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2)
+    return path
+
+
+def _annotate_reproducibility_report_with_blend_evaluation(
+    artifact_dir: str,
+    *,
+    evaluated: bool,
+    blend_report_path: str | None = None,
+    best_candidate: str | None = None,
+) -> None:
+    report_path = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
+    if not os.path.exists(report_path):
+        return
+    report = load_json_object(report_path, "reproducibility report")
+    report["blend_evaluation"] = {
+        "evaluated": bool(evaluated),
+        "report_path": blend_report_path,
+        "best_candidate": best_candidate,
+        "deployed": False,
+    }
+    _write_reproducibility_report(artifact_dir, report)
+
+
+def run_blend_experiments(
+    artifact_dir: str = ARTIFACT_DIR,
+    processed_dir: str = DATA_DIR,
+    raw_dir: str = "data/raw/",
+    full_feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
+) -> dict[str, Any]:
+    if not _has_real_training_inputs(processed_dir, raw_dir):
+        raise RuntimeError("Blend experiments require real processed splits and raw aggregate tables.")
+
+    bundle = _load_real_bundle(processed_dir, raw_dir)
+    with tempfile.TemporaryDirectory(prefix="blend_experiment_build_") as temp_root:
+        features = _build_features(bundle, temp_root, processed_dir, full_feature_view=full_feature_view)
+        y_train = bundle.train["TARGET"].to_numpy(dtype=int)
+        y_val_model = bundle.val_model["TARGET"].to_numpy(dtype=int)
+        y_val_policy = bundle.val_policy["TARGET"].to_numpy(dtype=int)
+        y_test = bundle.test["TARGET"].to_numpy(dtype=int)
+
+        pos = int(y_train.sum())
+        neg = int(len(y_train) - pos)
+        scale_pos_weight = float(neg / max(pos, 1))
+
+        xgb_result = _train_best_model_family(
+            "xgboost",
+            _candidate_model_params(scale_pos_weight),
+            features["train_full"],
+            y_train,
+            features["val_model_full"],
+            y_val_model,
+        )
+        lgbm_result = _train_best_model_family(
+            "lightgbm",
+            _candidate_lgbm_params(scale_pos_weight),
+            features["train_full"],
+            y_train,
+            features["val_model_full"],
+            y_val_model,
+        )
+
+        xgb_val_policy_raw = xgb_result["model"].predict_proba(features["val_policy_full"])[:, 1]
+        xgb_test_raw = xgb_result["model"].predict_proba(features["test_full"])[:, 1]
+        lgbm_val_policy_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], features["val_policy_full"])
+        lgbm_test_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], features["test_full"])
+
+        xgb_eval = _evaluate_calibrated_scores(y_val_policy, xgb_val_policy_raw, y_test, xgb_test_raw)
+        lgbm_eval = _evaluate_calibrated_scores(y_val_policy, lgbm_val_policy_raw, y_test, lgbm_test_raw)
+
+        weighted = _select_weighted_average_blend(
+            y_val_model,
+            xgb_result["val_model_raw_pd"],
+            lgbm_result["val_model_raw_pd"],
+        )
+        weighted_val_policy_raw = weighted["weight_xgb"] * xgb_val_policy_raw + weighted["weight_lgbm"] * lgbm_val_policy_raw
+        weighted_test_raw = weighted["weight_xgb"] * xgb_test_raw + weighted["weight_lgbm"] * lgbm_test_raw
+        weighted_eval = _evaluate_calibrated_scores(y_val_policy, weighted_val_policy_raw, y_test, weighted_test_raw)
+
+        meta = _fit_logistic_meta_blend(
+            y_val_model,
+            xgb_result["val_model_raw_pd"],
+            lgbm_result["val_model_raw_pd"],
+        )
+        meta_val_policy_raw = meta["meta_model"].predict_proba(np.column_stack([xgb_val_policy_raw, lgbm_val_policy_raw]))[:, 1]
+        meta_test_raw = meta["meta_model"].predict_proba(np.column_stack([xgb_test_raw, lgbm_test_raw]))[:, 1]
+        meta_eval = _evaluate_calibrated_scores(y_val_policy, meta_val_policy_raw, y_test, meta_test_raw)
+
+        candidates = {
+            "xgboost_full": {
+                "model_family": "xgboost",
+                "val_model_roc_auc": float(xgb_result["val_model_roc_auc"]),
+                "test_metrics": xgb_eval["metrics"],
+                "selected_candidate": xgb_result["selected_candidate"],
+                "selected_params": xgb_result["selected_params"],
+                "selected_calibrator": xgb_eval["selected_calibrator"],
+                "val_policy_calibration_metrics": xgb_eval["val_policy_calibration_metrics"],
+            },
+            "lightgbm_full": {
+                "model_family": "lightgbm",
+                "val_model_roc_auc": float(lgbm_result["val_model_roc_auc"]),
+                "test_metrics": lgbm_eval["metrics"],
+                "selected_candidate": lgbm_result["selected_candidate"],
+                "selected_params": lgbm_result["selected_params"],
+                "selected_calibrator": lgbm_eval["selected_calibrator"],
+                "val_policy_calibration_metrics": lgbm_eval["val_policy_calibration_metrics"],
+            },
+            "weighted_blend_full": {
+                "model_family": "blend",
+                "blend_method": "weighted_average",
+                "weights": {
+                    "xgboost": float(weighted["weight_xgb"]),
+                    "lightgbm": float(weighted["weight_lgbm"]),
+                },
+                "val_model_roc_auc": float(weighted["val_model_roc_auc"]),
+                "test_metrics": weighted_eval["metrics"],
+                "selected_calibrator": weighted_eval["selected_calibrator"],
+                "val_policy_calibration_metrics": weighted_eval["val_policy_calibration_metrics"],
+            },
+            "logistic_meta_blend_full": {
+                "model_family": "blend",
+                "blend_method": "logistic_meta",
+                "val_model_roc_auc": float(meta["val_model_roc_auc"]),
+                "test_metrics": meta_eval["metrics"],
+                "selected_calibrator": meta_eval["selected_calibrator"],
+                "val_policy_calibration_metrics": meta_eval["val_policy_calibration_metrics"],
+                "meta_coefficients": meta["meta_model"].coef_.tolist(),
+                "meta_intercept": meta["meta_model"].intercept_.tolist(),
+            },
+        }
+
+        best_candidate_name = max(
+            candidates.items(),
+            key=lambda item: item[1]["val_model_roc_auc"],
+        )[0]
+
+        report = {
+            "mode": bundle.mode,
+            "processed_manifest_fingerprint": _processed_manifest_fingerprint(processed_dir),
+            "full_feature_view": full_feature_view,
+            "single_model_runtime_unchanged": True,
+            "candidates": candidates,
+            "best_candidate_by_val_model": best_candidate_name,
+            "baseline_full_xgboost_test_roc_auc": float(candidates["xgboost_full"]["test_metrics"]["roc_auc"]),
+            "baseline_reduced_xgboost_test_roc_auc": None,
+            "notes": [
+                "Blend experiments are offline-only and do not replace the default runtime artifact stack.",
+                "val_model is used for family and blend selection; val_policy is used for calibration; test is final confirmation only.",
+            ],
+        }
+
+    blend_report_path = _write_blend_experiment_report(artifact_dir, report)
+    _annotate_reproducibility_report_with_blend_evaluation(
+        artifact_dir,
+        evaluated=True,
+        blend_report_path=blend_report_path,
+        best_candidate=best_candidate_name,
+    )
+    report["report_path"] = blend_report_path
+    return report
+
+
 def _write_reproducibility_report(artifact_dir: str, report: dict[str, Any]) -> str:
     path = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
     with open(path, "w", encoding="utf-8") as handle:
@@ -724,9 +1305,9 @@ def train_models(
     y_val_model = bundle.val_model["TARGET"].to_numpy(dtype=int)
     y_val_policy = bundle.val_policy["TARGET"].to_numpy(dtype=int)
     y_test = bundle.test["TARGET"].to_numpy(dtype=int)
+    processed_manifest_fingerprint = _processed_manifest_fingerprint(processed_dir)
 
-    full_result = _train_tier_model(
-        "FULL",
+    full_result = _train_full_runtime_candidate(
         features["train_full"],
         y_train,
         features["val_model_full"],
@@ -736,6 +1317,8 @@ def train_models(
         features["test_full"],
         y_test,
         artifact_dir,
+        full_feature_view=full_feature_view,
+        processed_manifest_fingerprint=processed_manifest_fingerprint,
     )
     reduced_result = _train_tier_model(
         "REDUCED",
@@ -755,10 +1338,11 @@ def train_models(
     report = {
         "mode": bundle.mode,
         "random_state": RANDOM_STATE,
-        "model_family": "xgboost",
-        "model_version": MODEL_VERSIONS["full"],
-        "deployed_model_version": MODEL_VERSIONS["full"],
-        "full_model_version": MODEL_VERSIONS["full"],
+        "model_family": full_result["selected_model_family"],
+        "model_version": full_result["selected_model_version"],
+        "deployed_model_version": full_result["selected_model_version"],
+        "full_model_version": full_result["selected_model_version"],
+        "full_xgboost_fallback_model_version": MODEL_VERSIONS["full"],
         "reduced_model_version": MODEL_VERSIONS["reduced"],
         "metrics": full_result["metrics"],
         "reduced_metrics": reduced_result["metrics"],
@@ -768,26 +1352,33 @@ def train_models(
             "val_policy": int(len(bundle.val_policy)),
             "test": int(len(bundle.test)),
         },
-        "processed_manifest_fingerprint": _processed_manifest_fingerprint(processed_dir),
+        "processed_manifest_fingerprint": processed_manifest_fingerprint,
         "tiers": {
             "FULL": {
-                "model_family": "xgboost",
-                "model_version": MODEL_VERSIONS["full"],
+                "model_family": full_result["selected_model_family"],
+                "model_version": full_result["selected_model_version"],
                 "feature_view": full_feature_view,
                 "feature_count": int(len(features["full_builder"].encoded_columns_)),
                 "metrics": full_result["metrics"],
                 "selection": {
                     "candidate": full_result["selected_candidate"],
                     "val_model_roc_auc": full_result["val_model_roc_auc"],
-                    "params": full_result["selected_params"],
                     "calibrator": full_result["selected_calibrator"],
                     "val_policy_calibration_metrics": full_result["val_policy_calibration_metrics"],
                 },
+                "candidates": full_result["candidates"],
                 "artifacts": {
                     "builder": _builder_artifact_path(artifact_dir, "FULL"),
                     "model": _artifact_path(artifact_dir, "full_model.joblib"),
                     "calibrator": _artifact_path(artifact_dir, "full_calibrator.joblib"),
                     "explainer": _artifact_path(artifact_dir, "full_shap_explainer.joblib"),
+                    "fallback_xgboost_model": _artifact_path(artifact_dir, f"{FULL_XGBOOST_CANDIDATE_PREFIX}_model.joblib"),
+                    "fallback_xgboost_calibrator": _artifact_path(artifact_dir, f"{FULL_XGBOOST_CANDIDATE_PREFIX}_calibrator.joblib"),
+                    "fallback_xgboost_explainer": _artifact_path(artifact_dir, f"{FULL_XGBOOST_CANDIDATE_PREFIX}_shap_explainer.joblib"),
+                    "weighted_blend_model": _artifact_path(artifact_dir, f"{FULL_WEIGHTED_BLEND_CANDIDATE_PREFIX}_model.joblib"),
+                    "weighted_blend_calibrator": _artifact_path(artifact_dir, f"{FULL_WEIGHTED_BLEND_CANDIDATE_PREFIX}_calibrator.joblib"),
+                    "weighted_blend_explainer": _artifact_path(artifact_dir, f"{FULL_WEIGHTED_BLEND_CANDIDATE_PREFIX}_shap_explainer.joblib"),
+                    "weighted_blend_metadata": full_result["blend_metadata_path"],
                 },
             },
             "REDUCED": {
@@ -813,19 +1404,26 @@ def train_models(
         "artifacts": {
             "fairness_result": _artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME),
             "reproducibility_report": _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME),
+            "full_weighted_blend_metadata": full_result["blend_metadata_path"],
+        },
+        "blend_evaluation": {
+            "evaluated": True,
+            "report_path": full_result["blend_metadata_path"],
+            "best_candidate": full_result["selected_candidate"],
+            "deployed": full_result["selected_candidate"] == "weighted_blend_full",
         },
         "notes": [
             "Synthetic fallback is used when local processed/raw data artifacts are unavailable.",
-            "This stabilized branch trains XGBoost candidate grids only; Logistic Regression and LightGBM are not evaluated by the current source.",
-            "Validation model split is used for candidate selection; validation policy split is used for probability calibration.",
+            "FULL trains an XGBoost fallback candidate and a deployable weighted XGBoost+LightGBM blend candidate under the same processed lineage.",
+            "REDUCED remains an XGBoost-only single-model tier in this workflow.",
+            "Validation model split is used for runtime-candidate selection; validation policy split is used for probability calibration; test is confirmation only.",
+            "Weighted blend explanations use a weighted component Tree SHAP approximation for stable runtime top-feature reasons.",
             "Module 3 writes model_fairness_audit_passed.joblib as a False placeholder. Module 4 owns the final overwrite.",
-            "Both FULL and REDUCED artifact stacks are trained and persisted in the same run.",
         ],
     }
     report["report_path"] = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
     _write_reproducibility_report(artifact_dir, report)
     return report
-
 
 def run_feature_view_ablations(
     processed_dir: str = DATA_DIR,
@@ -910,3 +1508,4 @@ if __name__ == "__main__":
     print(_format_metric_line("FULL", report["metrics"]))
     print(_format_metric_line("REDUCED", report["reduced_metrics"]))
     print(f"Report written to: {report['report_path']}")
+

@@ -115,13 +115,6 @@ PREVIOUS_AGG_COLS = [
     "PREV_APP_CREDIT_DIFF_MEAN",
     "PREV_DAYS_DECISION_MAX",
     "PREV_RATE_DOWN_PAYMENT_MEAN",
-    "PREV_APP_CREDIT_RATIO_MEAN",
-    "PREV_CREDIT_GOODS_RATIO_MEAN",
-    "PREV_RECENT_365_COUNT",
-    "PREV_RECENT_365_REFUSAL_RATE",
-    "PREV_RECENT_365_APP_CREDIT_RATIO_MEAN",
-    "PREV_LAST_REFUSED_FLAG",
-    "PREV_LAST_APP_CREDIT_RATIO",
 ]
 INSTALLMENTS_AGG_COLS = [
     "INST_RECORD_COUNT",
@@ -498,28 +491,6 @@ def _agg_bureau(raw_dir: str) -> pd.DataFrame:
 def _agg_previous(raw_dir: str) -> pd.DataFrame:
     prev = pd.read_csv(os.path.join(raw_dir, "previous_application.csv")).copy()
     prev["PREV_APP_CREDIT_DIFF_ROW"] = prev["AMT_APPLICATION"] - prev["AMT_CREDIT"]
-    prev["PREV_APP_CREDIT_RATIO_ROW"] = np.where(
-        prev["AMT_CREDIT"].notna() & (prev["AMT_CREDIT"] != 0),
-        safe_div(prev["AMT_APPLICATION"], prev["AMT_CREDIT"]),
-        np.nan,
-    )
-    prev["PREV_CREDIT_GOODS_RATIO_ROW"] = np.where(
-        prev["AMT_GOODS_PRICE"].notna() & (prev["AMT_GOODS_PRICE"] != 0),
-        safe_div(prev["AMT_CREDIT"], prev["AMT_GOODS_PRICE"]),
-        np.nan,
-    )
-    prev["PREV_REFUSED_FLAG"] = (prev["NAME_CONTRACT_STATUS"] == "Refused").astype("int8")
-    prev["PREV_RECENT_365_FLAG"] = (prev["DAYS_DECISION"] >= -365).astype("int8")
-    prev["PREV_RECENT_365_REFUSED_FLAG"] = np.where(
-        prev["DAYS_DECISION"] >= -365,
-        prev["PREV_REFUSED_FLAG"],
-        np.nan,
-    )
-    prev["PREV_RECENT_365_APP_CREDIT_RATIO"] = np.where(
-        prev["DAYS_DECISION"] >= -365,
-        prev["PREV_APP_CREDIT_RATIO_ROW"],
-        np.nan,
-    )
     g = prev.groupby("SK_ID_CURR")
     app_count = g.size()
     approved = g["NAME_CONTRACT_STATUS"].apply(lambda s: (s == "Approved").sum())
@@ -536,24 +507,9 @@ def _agg_previous(raw_dir: str) -> pd.DataFrame:
     out["PREV_APP_CREDIT_DIFF_MEAN"] = g["PREV_APP_CREDIT_DIFF_ROW"].mean()
     out["PREV_DAYS_DECISION_MAX"] = g["DAYS_DECISION"].max()
     out["PREV_RATE_DOWN_PAYMENT_MEAN"] = g["RATE_DOWN_PAYMENT"].mean()
-    out["PREV_APP_CREDIT_RATIO_MEAN"] = g["PREV_APP_CREDIT_RATIO_ROW"].mean()
-    out["PREV_CREDIT_GOODS_RATIO_MEAN"] = g["PREV_CREDIT_GOODS_RATIO_ROW"].mean()
-    out["PREV_RECENT_365_COUNT"] = g["PREV_RECENT_365_FLAG"].sum()
-    out["PREV_RECENT_365_REFUSAL_RATE"] = g["PREV_RECENT_365_REFUSED_FLAG"].mean()
-    out["PREV_RECENT_365_APP_CREDIT_RATIO_MEAN"] = g["PREV_RECENT_365_APP_CREDIT_RATIO"].mean()
-    last_idx = prev.groupby("SK_ID_CURR")["DAYS_DECISION"].idxmax()
-    last_rows = prev.loc[
-        last_idx,
-        ["SK_ID_CURR", "PREV_REFUSED_FLAG", "PREV_APP_CREDIT_RATIO_ROW"],
-    ].rename(
-        columns={
-            "PREV_REFUSED_FLAG": "PREV_LAST_REFUSED_FLAG",
-            "PREV_APP_CREDIT_RATIO_ROW": "PREV_LAST_APP_CREDIT_RATIO",
-        }
-    )
-    out = out.reset_index().merge(last_rows, on="SK_ID_CURR", how="left", validate="one_to_one")
-    assert_unique_key(out, "SK_ID_CURR", "previous_app_agg")
-    return out
+    result = out.reset_index()
+    assert_unique_key(result, "SK_ID_CURR", "previous_app_agg")
+    return result
 
 
 def _normalize_child_merge_curr(df: pd.DataFrame, label: str) -> pd.DataFrame:

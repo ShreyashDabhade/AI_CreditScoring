@@ -10,6 +10,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from src.models.runtime_support import WeightedBlendModel, WeightedBlendShapExplainer
 from src.api import (
     AGG_REQUIRED_FIELDS,
     APPLICATION_REQUIRED_FIELDS,
@@ -143,6 +144,65 @@ def _write_processed_manifest(processed_dir: Path) -> None:
     }
     (processed_dir / "processed_artifact_manifest.json").write_text(
         json.dumps(manifest),
+        encoding="utf-8",
+    )
+
+
+def _write_real_weighted_blend_artifacts(artifact_dir: Path) -> None:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    full_builder = SavedBuilderFixture("FULL")
+    reduced_builder = SavedBuilderFixture("REDUCED")
+    xgb_model = SavedModelFixture(len(full_builder.columns))
+    lgbm_model = SavedModelFixture(len(full_builder.columns))
+    weighted_model = WeightedBlendModel(
+        xgb_model,
+        lgbm_model,
+        weight_xgboost=0.4,
+        weight_lightgbm=0.6,
+        feature_count=len(full_builder.columns),
+    )
+    weighted_explainer = WeightedBlendShapExplainer(
+        SavedExplainerFixture(),
+        SavedExplainerFixture(),
+        weight_xgboost=0.4,
+        weight_lightgbm=0.6,
+    )
+    joblib.dump(weighted_model, artifact_dir / "full_model.joblib")
+    joblib.dump(SavedCalibratorFixture(), artifact_dir / "full_calibrator.joblib")
+    joblib.dump(weighted_explainer, artifact_dir / "full_shap_explainer.joblib")
+    joblib.dump(xgb_model, artifact_dir / "full_xgboost_model.joblib")
+    joblib.dump(SavedCalibratorFixture(), artifact_dir / "full_xgboost_calibrator.joblib")
+    joblib.dump(SavedExplainerFixture(), artifact_dir / "full_xgboost_shap_explainer.joblib")
+    joblib.dump(weighted_model, artifact_dir / "full_weighted_blend_model.joblib")
+    joblib.dump(SavedCalibratorFixture(), artifact_dir / "full_weighted_blend_calibrator.joblib")
+    joblib.dump(weighted_explainer, artifact_dir / "full_weighted_blend_shap_explainer.joblib")
+    joblib.dump(SavedModelFixture(len(reduced_builder.columns)), artifact_dir / "reduced_model.joblib")
+    joblib.dump(SavedCalibratorFixture(), artifact_dir / "reduced_calibrator.joblib")
+    joblib.dump(SavedExplainerFixture(), artifact_dir / "reduced_shap_explainer.joblib")
+    joblib.dump(True, artifact_dir / "model_fairness_audit_passed.joblib")
+    (artifact_dir / "full_weighted_blend_metadata.json").write_text(
+        json.dumps(
+            {
+                "blend_method": "weighted_average",
+                "weights": {"xgboost": 0.4, "lightgbm": 0.6},
+                "selected_runtime_candidate": "weighted_blend_full",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "reproducibility_report.json").write_text(
+        json.dumps(
+            {
+                "deployed_model_version": "full_weighted_blend_v2.2.0",
+                "full_model_version": "full_weighted_blend_v2.2.0",
+                "reduced_model_version": "deployed-reduced-2026.03",
+                "blend_evaluation": {
+                    "evaluated": True,
+                    "best_candidate": "weighted_blend_full",
+                    "deployed": True,
+                },
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -525,3 +585,30 @@ def test_real_mode_score_full_payload_uses_full_artifacts(tmp_path, monkeypatch)
     payload = response.get_json()
     assert payload["coverage_tier"] == "FULL"
     assert payload["model_version"] == "deployed-full-2026.03"
+
+
+def test_real_mode_score_full_payload_supports_selected_weighted_blend_artifacts(tmp_path, monkeypatch):
+    artifact_dir = tmp_path / "artifacts"
+    processed_dir = tmp_path / "processed"
+    _write_processed_manifest(processed_dir)
+    _write_real_weighted_blend_artifacts(artifact_dir)
+
+    def loader(**kwargs):
+        return {
+            "full_builder": SavedBuilderFixture("FULL"),
+            "reduced_builder": SavedBuilderFixture("REDUCED"),
+        }
+
+    _install_fake_builder_module(monkeypatch, loader)
+    app = create_app(
+        artifact_dir=str(artifact_dir),
+        processed_dir=str(processed_dir),
+        mock_mode=False,
+    )
+
+    response = app.test_client().post("/score", json=_make_full_payload())
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["coverage_tier"] == "FULL"
+    assert payload["model_version"] == "full_weighted_blend_v2.2.0"

@@ -79,10 +79,10 @@ def derive_fairness_groups(
     train_income_q1: float,
     train_income_q2: float,
 ) -> pd.DataFrame:
-    """Add 8 fairness group columns using train-fitted income quantiles."""
+    """Add support-stable proxy fairness groups using train-fitted quantiles."""
     df = df.copy()
 
-    # Step A — INCOME_TERTILE
+    # Step A ? INCOME_TERTILE
     def _income_tertile(x: float) -> str:
         if pd.isna(x):
             return "MISSING"
@@ -94,31 +94,32 @@ def derive_fairness_groups(
 
     df["INCOME_TERTILE"] = df["AMT_INCOME_TOTAL"].apply(_income_tertile)
 
-    # Step B — FAIR_GROUP_PRIMARY
+    # Step B ? FAIR_GROUP_PRIMARY
+    # Region-only family: keeps the geographic proxy lens but removes the
+    # prior income-region cross-product fragmentation/confounding.
     df["FAIR_GROUP_PRIMARY"] = (
-        df["INCOME_TERTILE"].astype(str)
-        + "__"
+        "REGION_"
         + df["REGION_RATING_CLIENT_W_CITY"].fillna(-1).astype(int).astype(str)
     )
 
-    # Step C — INCOME_TYPE_POOLED
+    # Step C ? INCOME_TYPE_POOLED
     from src.feature_engineering import pool_rare_categories
 
     df["INCOME_TYPE_POOLED"] = pool_rare_categories(
         df["NAME_INCOME_TYPE"], min_count=500
     ).fillna("MISSING")
 
-    # Step D — HOUSING_TYPE_POOLED
+    # Step D ? HOUSING_TYPE_POOLED
     df["HOUSING_TYPE_POOLED"] = pool_rare_categories(
         df["NAME_HOUSING_TYPE"], min_count=500
     ).fillna("MISSING")
 
-    # Step E — FAIR_GROUP_SECONDARY
-    df["FAIR_GROUP_SECONDARY"] = (
-        df["INCOME_TYPE_POOLED"] + "__" + df["HOUSING_TYPE_POOLED"]
-    )
+    # Step E ? FAIR_GROUP_SECONDARY
+    # Income-tertile family: provides a cleaner socioeconomic calibration
+    # lens than the prior income-type x housing cross-product.
+    df["FAIR_GROUP_SECONDARY"] = "INCOME_" + df["INCOME_TERTILE"].astype(str)
 
-    # Step F — CHILDREN_BIN
+    # Step F ? CHILDREN_BIN
     df["CHILDREN_BIN"] = pd.cut(
         df["CNT_CHILDREN"].fillna(0),
         bins=[-1, 0, 1, np.inf],
@@ -126,12 +127,12 @@ def derive_fairness_groups(
     )
     df["CHILDREN_BIN"] = df["CHILDREN_BIN"].astype(str)
 
-    # Step G — OWN_ASSET_BIN
+    # Step G ? OWN_ASSET_BIN
     df["OWN_ASSET_BIN"] = (
         df["FLAG_OWN_CAR"].fillna("N") + "_" + df["FLAG_OWN_REALTY"].fillna("N")
     )
 
-    # Step H — FAIR_GROUP_TERTIARY
+    # Step H ? FAIR_GROUP_TERTIARY
     df["FAIR_GROUP_TERTIARY"] = (
         df["OWN_ASSET_BIN"] + "__" + df["CHILDREN_BIN"]
     )
@@ -582,7 +583,8 @@ if __name__ == "__main__":
         assert col in result.columns, f"Missing column: {col}"
 
     assert set(result["INCOME_TERTILE"].unique()).issubset({"T1", "T2", "T3", "MISSING"})
-    assert result["FAIR_GROUP_PRIMARY"].str.contains("__").all()
+    assert result["FAIR_GROUP_PRIMARY"].str.startswith("REGION_").all()
+    assert result["FAIR_GROUP_SECONDARY"].str.startswith("INCOME_").all()
     assert result["CHILDREN_BIN"].isin(["0", "1", "2_PLUS"]).all()
     print("  derive_fairness_groups ......... PASSED")
 
