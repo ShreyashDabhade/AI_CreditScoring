@@ -7,8 +7,7 @@
     "ordered_split_60_10_10_20(df: pd.DataFrame) -> tuple[DataFrame,DataFrame,DataFrame,DataFrame]",
     "fit_missing_policy(train_df: pd.DataFrame) -> tuple[list[str],dict[str,float],dict[str,str]]",
     "apply_missing_policy(df, flag_cols, num_medians, cat_modes, for_linear_model=False) -> pd.DataFrame",
-    "build_adversarial_dataset(train_app, test_app) -> tuple[pd.DataFrame,pd.DataFrame]",
-    "serialize_dataframe(df: pd.DataFrame, path: str) -> None"
+    "build_adversarial_dataset(train_app, test_app) -> tuple[pd.DataFrame,pd.DataFrame]"
   ],
   "routes": [],
   "schema": {
@@ -41,6 +40,7 @@
     "data/processed/test.pkl",
     "data/processed/app_test_adv.pkl",
     "data/processed/income_cap.joblib",
+    "data/processed/processed_artifact_manifest.json",
     "data/data_quality_report.json",
     "notebooks/eda_plots/target_distribution.png",
     "notebooks/eda_plots/missing_value_heatmap.png",

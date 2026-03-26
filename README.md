@@ -16,6 +16,8 @@ Real mode is strict and fail-fast. Startup is expected to fail if processed line
 
 The corrected forward proxy-time regime from the repaired workflow supersedes earlier split-based metrics. Old quarantined artifacts must not be reused.
 
+`artifacts/blend_experiment_report.json`, `artifacts/fairness_aware_modeling_experiment_report.json`, and `artifacts/subgroup_calibration_experiment_report.json` are offline-only experiment reports and are not live runtime inputs.
+
 ## Installation
 
 ```bash
@@ -82,7 +84,7 @@ Returns:
 ```json
 {
   "status": "ok",
-  "model_version": "full_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1",
+  "model_version": "full_weighted_blend_v2.2.0",
   "fairness_audit_passed": true,
   "coverage_tiers_available": ["FULL", "REDUCED"]
 }
@@ -202,7 +204,7 @@ Success response:
   "top_5_explanations": [
     { "feature": "BUREAU_LOAN_COUNT", "reason": "External credit history indicates elevated repayment risk" }
   ],
-  "model_version": "reduced_v2.1.0|router_v1.0.0|policy_v1.0.0|fairness_v2026Q1",
+  "model_version": "reduced_v2.1.0",
   "calibrated": true,
   "model_fairness_audit_passed": true,
   "fairness_audit_version": "proxy_audit_2026Q1_v1.1",
@@ -211,4 +213,6 @@ Success response:
 ```
 
 `model_fairness_audit_passed` reflects the offline fairness artifact produced by Module 4. The API does not rerun fairness checks during live scoring.
+
+In the current real runtime, FULL responses return `full_weighted_blend_v2.2.0` and REDUCED responses return `reduced_v2.1.0`.
 

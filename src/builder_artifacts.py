@@ -83,38 +83,6 @@ def load_builder(
     return builder
 
 
-def load_full_builder(
-    *,
-    artifact_dir: str,
-    processed_dir: str,
-    processed_manifest: Mapping[str, Any] | None = None,
-    strict_artifacts: bool = True,
-) -> FrozenFeatureBuilder:
-    return load_builder(
-        tier="FULL",
-        artifact_dir=artifact_dir,
-        processed_dir=processed_dir,
-        processed_manifest=processed_manifest,
-        strict_artifacts=strict_artifacts,
-    )
-
-
-def load_reduced_builder(
-    *,
-    artifact_dir: str,
-    processed_dir: str,
-    processed_manifest: Mapping[str, Any] | None = None,
-    strict_artifacts: bool = True,
-) -> FrozenFeatureBuilder:
-    return load_builder(
-        tier="REDUCED",
-        artifact_dir=artifact_dir,
-        processed_dir=processed_dir,
-        processed_manifest=processed_manifest,
-        strict_artifacts=strict_artifacts,
-    )
-
-
 def load_validated_builders(
     *,
     artifact_dir: str,

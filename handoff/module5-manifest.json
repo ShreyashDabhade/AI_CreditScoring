@@ -5,7 +5,7 @@
     "validate_payload(payload: dict) -> tuple[str | None, list[str]]",
     "determine_coverage_tier(payload: dict) -> str",
     "build_input_df(payload: dict, tier: str) -> pd.DataFrame",
-    "score_request(payload: dict, runtime: dict, mock_mode: bool = false) -> dict"
+    "score_request(payload: dict, runtime: ApiRuntime, mock_mode: bool = false) -> dict"
   ],
   "routes": [
     "GET /",

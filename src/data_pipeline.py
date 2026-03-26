@@ -684,5 +684,3 @@ if __name__ == "__main__":
         json.dump(report, f, indent=2)
 
     print("data_quality_report.json saved")
-
-
