@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">Analysis Workspace</p>
+        <h1>Tier-aware credit scoring</h1>
+        <p class="page-intro">
+            Select REDUCED for application-only fields, or FULL to
+            include all aggregate sections required by the pipeline.
+        </p>
+    </div>
+</section>
+
+<section class="section section-base analysis-selector-section">
+    <div class="section-shell tier-selector-wrap">
+        <div class="tier-selector" role="tablist" aria-label="Coverage tier">
+            <button type="button" class="tier-toggle active" data-tier-toggle data-tier="REDUCED" aria-selected="true">REDUCED</button>
+            <button type="button" class="tier-toggle" data-tier-toggle data-tier="FULL" aria-selected="false">FULL</button>
+        </div>
+        <p class="tier-description" id="tier-description">33 fields - application section only</p>
+    </div>
+</section>
+
+<section class="section section-base analysis-workspace-section">
+    <div class="section-shell">
+        <div id="analysis-form-stage">
+            <div class="form-panel">
+                <form id="analysis-form" novalidate>
+                    <div class="form-section-group">
+                        <p class="form-section-label">Application Fields</p>
+                        <div class="form-grid">
+                            <div class="input-field">
+                                <label for="AMT_INCOME_TOTAL_CAPPED">AMT_INCOME_TOTAL_CAPPED</label>
+                                <input id="AMT_INCOME_TOTAL_CAPPED" name="AMT_INCOME_TOTAL_CAPPED" data-section="application" data-type="number" type="number" step="any" placeholder="120000">
+                            </div>
+                            <div class="input-field">
+                                <label for="AMT_CREDIT">AMT_CREDIT</label>
+                                <input id="AMT_CREDIT" name="AMT_CREDIT" data-section="application" data-type="number" type="number" step="any" placeholder="250000">
+                            </div>
+                            <div class="input-field">
+                                <label for="AMT_ANNUITY">AMT_ANNUITY</label>
+                                <input id="AMT_ANNUITY" name="AMT_ANNUITY" data-section="application" data-type="number" type="number" step="any" placeholder="25000">
+                            </div>
+                            <div class="input-field">
+                                <label for="AMT_GOODS_PRICE">AMT_GOODS_PRICE</label>
+                                <input id="AMT_GOODS_PRICE" name="AMT_GOODS_PRICE" data-section="application" data-type="number" type="number" step="any" placeholder="220000">
+                            </div>
+                            <div class="input-field">
+                                <label for="DAYS_BIRTH">DAYS_BIRTH</label>
+                                <input id="DAYS_BIRTH" name="DAYS_BIRTH" data-section="application" data-type="number" data-negate="true" type="number" step="1" placeholder="12000">
+                                <p class="field-hint">Enter as positive number (days)</p>
+                            </div>
+                            <div class="input-field">
+                                <label for="DAYS_EMPLOYED">DAYS_EMPLOYED</label>
+                                <input id="DAYS_EMPLOYED" name="DAYS_EMPLOYED" data-section="application" data-type="number" data-negate="true" type="number" step="1" placeholder="1500">
+                                <p class="field-hint">Enter as positive number (days)</p>
+                            </div>
+                            <div class="input-field">
+                                <label for="DAYS_REGISTRATION">DAYS_REGISTRATION</label>
+                                <input id="DAYS_REGISTRATION" name="DAYS_REGISTRATION" data-section="application" data-type="number" data-negate="true" type="number" step="1" placeholder="3000">
+                                <p class="field-hint">Enter as positive number (days)</p>
+                            </div>
+                            <div class="input-field">
+                                <label for="DAYS_ID_PUBLISH">DAYS_ID_PUBLISH</label>
+                                <input id="DAYS_ID_PUBLISH" name="DAYS_ID_PUBLISH" data-section="application" data-type="number" data-negate="true" type="number" step="1" placeholder="2000">
+                                <p class="field-hint">Enter as positive number (days)</p>
+                            </div>
+                            <div class="input-field">
+                                <label for="DAYS_LAST_PHONE_CHANGE">DAYS_LAST_PHONE_CHANGE</label>
+                                <input id="DAYS_LAST_PHONE_CHANGE" name="DAYS_LAST_PHONE_CHANGE" data-section="application" data-type="number" data-negate="true" type="number" step="1" placeholder="1000">
+                                <p class="field-hint">Enter as positive number (days)</p>
+                            </div>
+                            <div class="input-field">
+                                <label for="EXT_SOURCE_1">EXT_SOURCE_1</label>
+                                <input id="EXT_SOURCE_1" name="EXT_SOURCE_1" data-section="application" data-type="number" type="number" step="0.01" placeholder="0.50">
+                            </div>
+                            <div class="input-field">
+                                <label for="EXT_SOURCE_2">EXT_SOURCE_2</label>
+                                <input id="EXT_SOURCE_2" name="EXT_SOURCE_2" data-section="application" data-type="number" type="number" step="0.01" placeholder="0.45">
+                            </div>
+                            <div class="input-field">
+                                <label for="EXT_SOURCE_3">EXT_SOURCE_3</label>
+                                <input id="EXT_SOURCE_3" name="EXT_SOURCE_3" data-section="application" data-type="number" type="number" step="0.01" placeholder="0.60">
+                            </div>
+                            <div class="input-field">
+                                <label for="NAME_CONTRACT_TYPE">NAME_CONTRACT_TYPE</label>
+                                <select id="NAME_CONTRACT_TYPE" name="NAME_CONTRACT_TYPE" data-section="application" data-type="text">
+                                    <option value="">Select</option>
+                                    <option value="Cash loans">Cash loans</option>
+                                    <option value="Revolving loans">Revolving loans</option>
+                                </select>
+                            </div>
+                            <div class="input-field">
+                                <label for="NAME_EDUCATION_TYPE">NAME_EDUCATION_TYPE</label>
+                                <select id="NAME_EDUCATION_TYPE" name="NAME_EDUCATION_TYPE" data-section="application" data-type="text">
+                                    <option value="">Select</option>
+                                    <option value="Higher education">Higher education</option>
+                                    <option value="Secondary / secondary special">Secondary</option>
+                                    <option value="Incomplete higher">Incomplete higher</option>
+                                    <option value="Lower secondary">Lower secondary</option>
+                                    <option value="Academic degree">Academic degree</option>
+                                </select>
+                            </div>
+                            <div class="input-field">
+                                <label for="NAME_FAMILY_STATUS">NAME_FAMILY_STATUS</label>
+                                <select id="NAME_FAMILY_STATUS" name="NAME_FAMILY_STATUS" data-section="application" data-type="text">
+                                    <option value="">Select</option>
+                                    <option value="Married">Married</option>
+                                    <option value="Single / not married">Single</option>
+                                    <option value="Civil marriage">Civil marriage</option>
+                                    <option value="Separated">Separated</option>
+                                    <option value="Widow">Widow</option>
+                                </select>
+                            </div>
+                            <div class="input-field">
+                                <label for="OCCUPATION_TYPE">OCCUPATION_TYPE</label>
+                                <input id="OCCUPATION_TYPE" name="OCCUPATION_TYPE" data-section="application" data-type="text" type="text" placeholder="Laborers">
+                            </div>
+                            <div class="input-field">
+                                <label for="ORGANIZATION_TYPE">ORGANIZATION_TYPE</label>
+                                <input id="ORGANIZATION_TYPE" name="ORGANIZATION_TYPE" data-section="application" data-type="text" type="text" placeholder="Business Entity Type 3">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-divider bureau-divider" id="bureau-divider"></div>
+
+                    <div class="form-section-group bureau-group" id="bureau-fields">
+                        <p class="form-section-label">Bureau &amp; History Aggregates</p>
+                        <div class="form-grid">
+                            <div class="input-field">
+                                <label for="BUREAU_LOAN_COUNT">BUREAU_LOAN_COUNT</label>
+                                <input id="BUREAU_LOAN_COUNT" name="BUREAU_LOAN_COUNT" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="2">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_ACTIVE_COUNT">BUREAU_ACTIVE_COUNT</label>
+                                <input id="BUREAU_ACTIVE_COUNT" name="BUREAU_ACTIVE_COUNT" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="1">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_CLOSED_COUNT">BUREAU_CLOSED_COUNT</label>
+                                <input id="BUREAU_CLOSED_COUNT" name="BUREAU_CLOSED_COUNT" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="1">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_AMT_CREDIT_SUM_SUM">BUREAU_AMT_CREDIT_SUM_SUM</label>
+                                <input id="BUREAU_AMT_CREDIT_SUM_SUM" name="BUREAU_AMT_CREDIT_SUM_SUM" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="50000">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_AMT_CREDIT_SUM_DEBT_SUM">BUREAU_AMT_CREDIT_SUM_DEBT_SUM</label>
+                                <input id="BUREAU_AMT_CREDIT_SUM_DEBT_SUM" name="BUREAU_AMT_CREDIT_SUM_DEBT_SUM" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="10000">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_DEBT_TO_CREDIT_RATIO">BUREAU_DEBT_TO_CREDIT_RATIO</label>
+                                <input id="BUREAU_DEBT_TO_CREDIT_RATIO" name="BUREAU_DEBT_TO_CREDIT_RATIO" data-section="bureau_agg" data-type="number" type="number" step="0.01" placeholder="0.20">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_AMT_CREDIT_SUM_OVERDUE_SUM">BUREAU_AMT_CREDIT_SUM_OVERDUE_SUM</label>
+                                <input id="BUREAU_AMT_CREDIT_SUM_OVERDUE_SUM" name="BUREAU_AMT_CREDIT_SUM_OVERDUE_SUM" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="0">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_CREDIT_DAY_OVERDUE_MAX">BUREAU_CREDIT_DAY_OVERDUE_MAX</label>
+                                <input id="BUREAU_CREDIT_DAY_OVERDUE_MAX" name="BUREAU_CREDIT_DAY_OVERDUE_MAX" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="0">
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_DAYS_CREDIT_MAX">BUREAU_DAYS_CREDIT_MAX</label>
+                                <input id="BUREAU_DAYS_CREDIT_MAX" name="BUREAU_DAYS_CREDIT_MAX" data-section="bureau_agg" data-type="number" data-negate="true" type="number" step="1" placeholder="200">
+                                <p class="field-hint">Enter as positive number (days)</p>
+                            </div>
+                            <div class="input-field">
+                                <label for="BUREAU_CNT_CREDIT_PROLONG_SUM">BUREAU_CNT_CREDIT_PROLONG_SUM</label>
+                                <input id="BUREAU_CNT_CREDIT_PROLONG_SUM" name="BUREAU_CNT_CREDIT_PROLONG_SUM" data-section="bureau_agg" data-type="number" type="number" step="any" placeholder="0">
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <div class="analysis-action">
+                <button type="button" class="button button-primary button-large" id="score-button">Score Application</button>
+                <p class="analysis-feedback" id="analysis-feedback" aria-live="polite"></p>
+            </div>
+        </div>
+
+        <div class="analysis-loading is-hidden" id="analysis-loading-stage" aria-live="polite">
+            <h2>Analysing application...</h2>
+            <p>Sending request to /score</p>
+        </div>
+    </div>
+</section>
+
+<section class="section section-base analysis-result is-hidden" id="analysis-result">
+    <div class="section-shell result-shell">
+        <div class="decision-summary">
+            <p class="probability-display" id="result-probability">21%</p>
+            <div class="decision-pill review" id="result-decision">REVIEW</div>
+        </div>
+
+        <div class="metadata-list" id="result-metadata"></div>
+
+        <div class="drivers-block">
+            <div class="drivers-header">
+                <h2>Top 5 Decision Drivers</h2>
+                <p>SHAP-derived feature contributions for this application.</p>
+            </div>
+            <div class="driver-list" id="driver-list"></div>
+        </div>
+
+        <div class="result-action">
+            <button type="button" class="button button-ghost" id="score-another">Score Another Application</button>
+        </div>
+    </div>
+</section>
+{% endblock %}
