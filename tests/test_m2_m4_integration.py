@@ -76,12 +76,14 @@ def _write_raw_tables(raw_dir: Path, sk_ids: list[int]) -> None:
     raw_dir.mkdir(parents=True, exist_ok=True)
     prev_rows = []
     bureau_rows = []
+    bb_rows = []
     inst_rows = []
     pos_rows = []
     cc_rows = []
 
     for idx, sk_id in enumerate(sk_ids, start=1):
         sk_prev = sk_id * 10
+        sk_bureau = sk_id * 100
         prev_rows.append(
             {
                 "SK_ID_PREV": sk_prev,
@@ -97,14 +99,23 @@ def _write_raw_tables(raw_dir: Path, sk_ids: list[int]) -> None:
         bureau_rows.append(
             {
                 "SK_ID_CURR": sk_id,
+                "SK_ID_BUREAU": sk_bureau,
                 "CREDIT_ACTIVE": "Active" if idx % 2 else "Closed",
                 "AMT_CREDIT_SUM": 50000.0 + idx,
                 "AMT_CREDIT_SUM_DEBT": 10000.0 + idx,
-                "AMT_CREDIT_SUM_OVERDUE": 0.0,
+                "AMT_CREDIT_SUM_OVERDUE": float(idx % 2),
+                "AMT_CREDIT_MAX_OVERDUE": 1000.0 + idx,
                 "CREDIT_DAY_OVERDUE": 0.0,
                 "DAYS_CREDIT": -200.0 - idx,
                 "CNT_CREDIT_PROLONG": 0.0,
             }
+        )
+        bb_rows.extend(
+            [
+                {"SK_ID_BUREAU": sk_bureau, "MONTHS_BALANCE": 0, "STATUS": "0" if idx % 2 else "1"},
+                {"SK_ID_BUREAU": sk_bureau, "MONTHS_BALANCE": -1, "STATUS": "C" if idx % 2 else "0"},
+                {"SK_ID_BUREAU": sk_bureau, "MONTHS_BALANCE": -2, "STATUS": "X"},
+            ]
         )
         inst_rows.append(
             {
@@ -138,6 +149,7 @@ def _write_raw_tables(raw_dir: Path, sk_ids: list[int]) -> None:
         )
 
     pd.DataFrame(bureau_rows).to_csv(raw_dir / "bureau.csv", index=False)
+    pd.DataFrame(bb_rows).to_csv(raw_dir / "bureau_balance.csv", index=False)
     pd.DataFrame(prev_rows).to_csv(raw_dir / "previous_application.csv", index=False)
     pd.DataFrame(inst_rows).to_csv(raw_dir / "installments_payments.csv", index=False)
     pd.DataFrame(pos_rows).to_csv(raw_dir / "POS_CASH_balance.csv", index=False)
@@ -151,6 +163,32 @@ def test_m2_exports_support_m4_contract():
     assert callable(build_full)
     assert callable(fit_full_builder)
     assert callable(pool_rare_categories)
+
+
+def test_full_builder_accepts_public_api_flattened_payload_when_offline_bureau_features_are_absent(tmp_path):
+    from src.api.app import AGG_REQUIRED_FIELDS, APPLICATION_REQUIRED_FIELDS, build_input_df
+    from src.feature_engineering import build_full, fit_full_builder
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [300001, 300002, 300003, 300004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+    builder = fit_full_builder(train_df, raw_dir=str(raw_dir), save_path=None)
+
+    row = train_df.iloc[0]
+    payload = {
+        "application": {field: row[field] for field in APPLICATION_REQUIRED_FIELDS},
+    }
+    for section_name, fields in AGG_REQUIRED_FIELDS.items():
+        payload[section_name] = {field: float(index + 1) for index, field in enumerate(fields)}
+
+    flat_df = build_input_df(payload, "FULL")
+    assert "BB_MAX_STATUS_MEAN" not in flat_df.columns
+
+    transformed = build_full(flat_df, builder, raw_dir=None)
+
+    assert list(transformed.columns) == builder.encoded_columns_
+    assert transformed["BB_MAX_STATUS_MEAN"].notna().all()
 
 
 def test_fit_full_builder_is_pure_without_save_path(tmp_path):

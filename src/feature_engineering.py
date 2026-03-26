@@ -92,6 +92,16 @@ BUREAU_AGG_COLS = [
     "BUREAU_CREDIT_DAY_OVERDUE_MAX",
     "BUREAU_DAYS_CREDIT_MAX",
     "BUREAU_CNT_CREDIT_PROLONG_SUM",
+    "BUREAU_ACTIVE_SHARE",
+    "BUREAU_AMT_CREDIT_MAX_OVERDUE_MAX",
+    "BUREAU_ACTIVE_DEBT_RATIO",
+    "BUREAU_DAYS_CREDIT_MEAN",
+    "BUREAU_DAYS_CREDIT_MIN",
+    "BB_MONTHS_COUNT_MEAN",
+    "BB_MAX_STATUS_MAX",
+    "BB_MAX_STATUS_MEAN",
+    "BB_ADVERSE_ACCOUNT_RATE",
+    "BB_ADVERSE_RATE_MEAN",
 ]
 PREVIOUS_AGG_COLS = [
     "PREV_APP_COUNT",
@@ -298,8 +308,8 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     assert "AMT_INCOME_TOTAL_CAPPED" in df.columns, "AMT_INCOME_TOTAL_CAPPED missing - Module 1 not applied"
     assert "DAYS_EMPLOYED_ANOM" in df.columns, "DAYS_EMPLOYED_ANOM missing - Module 1 Trap A not applied"
     df["AGE_YEARS"] = -df["DAYS_BIRTH"] / 365
-    df["CREDIT_INCOME_RATIO"] = safe_div(df["AMT_CREDIT"], df["AMT_INCOME_TOTAL_CAPPED"])
-    df["ANNUITY_INCOME_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_INCOME_TOTAL_CAPPED"])
+    df["CREDIT_INCOME_RATIO"] = safe_div(df["AMT_CREDIT"], df["AMT_INCOME_TOTAL_CAPPED"] )
+    df["ANNUITY_INCOME_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_INCOME_TOTAL_CAPPED"] )
     df["GOODS_CREDIT_RATIO"] = safe_div(df["AMT_GOODS_PRICE"], df["AMT_CREDIT"])
     df["CREDIT_TERM_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_CREDIT"])
     df["EMPLOYED_BIRTH_RATIO"] = safe_div(df["DAYS_EMPLOYED"], df["DAYS_BIRTH"])
@@ -324,8 +334,65 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _agg_bureau_balance(bureau_df: pd.DataFrame, raw_dir: str) -> pd.DataFrame:
+    bb = pd.read_csv(
+        os.path.join(raw_dir, "bureau_balance.csv"),
+        usecols=["SK_ID_BUREAU", "MONTHS_BALANCE", "STATUS"],
+    ).copy()
+    bb["BB_STATUS_SEVERITY"] = bb["STATUS"].map({
+        "X": np.nan,
+        "C": 0.0,
+        "0": 0.0,
+        "1": 1.0,
+        "2": 2.0,
+        "3": 3.0,
+        "4": 4.0,
+        "5": 5.0,
+    }).astype(float)
+    bb["BB_ADVERSE_FLAG"] = bb["STATUS"].isin(["1", "2", "3", "4", "5"]).astype("int8")
+    g = bb.groupby("SK_ID_BUREAU")
+    out = pd.DataFrame(index=g.size().index)
+    out["BB_MONTHS_COUNT"] = g.size()
+    out["BB_ACCOUNT_MAX_STATUS_SEVERITY"] = g["BB_STATUS_SEVERITY"].max()
+    out["BB_ACCOUNT_ADVERSE_RATE"] = g["BB_ADVERSE_FLAG"].mean()
+    account_level = out.reset_index()
+    bureau_keys = bureau_df[["SK_ID_BUREAU", "SK_ID_CURR"]].drop_duplicates()
+    account_level = account_level.merge(
+        bureau_keys,
+        on="SK_ID_BUREAU",
+        how="inner",
+        validate="one_to_one",
+    )
+    current_level = account_level.groupby("SK_ID_CURR")
+    out = pd.DataFrame(index=current_level.size().index)
+    out["BB_MONTHS_COUNT_MEAN"] = current_level["BB_MONTHS_COUNT"].mean()
+    out["BB_MAX_STATUS_MAX"] = current_level["BB_ACCOUNT_MAX_STATUS_SEVERITY"].max()
+    out["BB_MAX_STATUS_MEAN"] = current_level["BB_ACCOUNT_MAX_STATUS_SEVERITY"].mean()
+    out["BB_ADVERSE_ACCOUNT_RATE"] = current_level["BB_ACCOUNT_ADVERSE_RATE"].apply(
+        lambda s: (s.fillna(0) > 0).mean()
+    )
+    out["BB_ADVERSE_RATE_MEAN"] = current_level["BB_ACCOUNT_ADVERSE_RATE"].mean()
+    result = out.reset_index()
+    assert_unique_key(result, "SK_ID_CURR", "bureau_balance_agg")
+    return result
+
+
 def _agg_bureau(raw_dir: str) -> pd.DataFrame:
-    bureau = pd.read_csv(os.path.join(raw_dir, "bureau.csv"))
+    bureau = pd.read_csv(
+        os.path.join(raw_dir, "bureau.csv"),
+        usecols=[
+            "SK_ID_CURR",
+            "SK_ID_BUREAU",
+            "CREDIT_ACTIVE",
+            "DAYS_CREDIT",
+            "CREDIT_DAY_OVERDUE",
+            "AMT_CREDIT_MAX_OVERDUE",
+            "CNT_CREDIT_PROLONG",
+            "AMT_CREDIT_SUM",
+            "AMT_CREDIT_SUM_DEBT",
+            "AMT_CREDIT_SUM_OVERDUE",
+        ],
+    ).copy()
     g = bureau.groupby("SK_ID_CURR")
     out = pd.DataFrame(index=g.size().index)
     out["BUREAU_LOAN_COUNT"] = g.size()
@@ -341,7 +408,38 @@ def _agg_bureau(raw_dir: str) -> pd.DataFrame:
     out["BUREAU_CREDIT_DAY_OVERDUE_MAX"] = g["CREDIT_DAY_OVERDUE"].max()
     out["BUREAU_DAYS_CREDIT_MAX"] = g["DAYS_CREDIT"].max()
     out["BUREAU_CNT_CREDIT_PROLONG_SUM"] = g["CNT_CREDIT_PROLONG"].sum()
+    out["BUREAU_ACTIVE_SHARE"] = safe_div(
+        out["BUREAU_ACTIVE_COUNT"].to_numpy(),
+        out["BUREAU_LOAN_COUNT"].to_numpy(),
+    )
+    out["BUREAU_AMT_CREDIT_MAX_OVERDUE_MAX"] = g["AMT_CREDIT_MAX_OVERDUE"].max()
+    active_credit = bureau.assign(
+        _ACTIVE_CREDIT_SUM=np.where(
+            bureau["CREDIT_ACTIVE"] == "Active",
+            bureau["AMT_CREDIT_SUM"],
+            np.nan,
+        )
+    ).groupby("SK_ID_CURR")["_ACTIVE_CREDIT_SUM"].sum(min_count=1)
+    active_debt = bureau.assign(
+        _ACTIVE_DEBT_SUM=np.where(
+            bureau["CREDIT_ACTIVE"] == "Active",
+            bureau["AMT_CREDIT_SUM_DEBT"],
+            np.nan,
+        )
+    ).groupby("SK_ID_CURR")["_ACTIVE_DEBT_SUM"].sum(min_count=1)
+    out["BUREAU_ACTIVE_DEBT_RATIO"] = safe_div(
+        active_debt.reindex(out.index).to_numpy(),
+        active_credit.reindex(out.index).to_numpy(),
+    )
+    out["BUREAU_DAYS_CREDIT_MEAN"] = g["DAYS_CREDIT"].mean()
+    out["BUREAU_DAYS_CREDIT_MIN"] = g["DAYS_CREDIT"].min()
     result = out.reset_index()
+    result = safe_left_merge_one_to_one(
+        result,
+        _agg_bureau_balance(bureau, raw_dir),
+        "SK_ID_CURR",
+        "bureau_balance_agg",
+    )
     assert_unique_key(result, "SK_ID_CURR", "bureau_agg")
     return result
 
@@ -512,16 +610,14 @@ def _build_pre_model_frame(
 ) -> pd.DataFrame:
     tier = tier.upper()
     has_any_aggs = any(c in df.columns for c in ALL_AGGREGATE_FEATURE_COLS)
-    has_all_aggs = all(c in df.columns for c in ALL_AGGREGATE_FEATURE_COLS)
-    if tier == "FULL" and has_any_aggs and not has_all_aggs:
-        raise ValueError("FULL input must contain either all flattened aggregate columns or none")
-    use_flat_aggs = tier == "FULL" and allow_flattened_full_input and has_all_aggs
+    use_flat_aggs = tier == "FULL" and allow_flattened_full_input and has_any_aggs
     base = _select_application_frame(df, require_sk_id_curr=(tier == "FULL" and not use_flat_aggs))
     base = _engineer_application_features(base)
     if tier == "FULL":
         if use_flat_aggs:
+            flat_agg_cols = [c for c in ALL_AGGREGATE_FEATURE_COLS if c in df.columns]
             base = pd.concat(
-                [base.reset_index(drop=True), df[ALL_AGGREGATE_FEATURE_COLS].reset_index(drop=True)],
+                [base.reset_index(drop=True), df[flat_agg_cols].reset_index(drop=True)],
                 axis=1,
             )
         else:
@@ -717,6 +813,10 @@ def _transform_with_builder(
 ) -> pd.DataFrame:
     pre_model = _build_pre_model_frame(df, builder.tier, raw_dir=raw_dir, allow_flattened_full_input=True)
     pre_model = _align_pre_model_frame(pre_model, builder.pre_model_columns_)
+    if builder.tier == "FULL" and raw_dir is None:
+        for col, value in builder.numeric_imputers_.items():
+            if col in pre_model.columns and pre_model[col].isna().all():
+                pre_model[col] = value
     pre_model = _apply_rare_category_maps(
         pre_model,
         builder.categorical_columns_,
