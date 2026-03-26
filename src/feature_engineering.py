@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -18,6 +19,12 @@ from src.runtime_verification import (
     rare_map_schema_hash,
     safe_git_commit,
 )
+
+if __name__ == "__main__":
+    # Preserve a single canonical module identity when this file is run via
+    # `python -m src.feature_engineering` so persisted builders unpickle as
+    # src.feature_engineering.FrozenFeatureBuilder in later processes.
+    sys.modules.setdefault("src.feature_engineering", sys.modules[__name__])
 
 CATEGORICAL_MODEL_COLS = [
     "NAME_CONTRACT_TYPE",
@@ -238,6 +245,9 @@ class FrozenFeatureBuilder:
         raw_dir: str | None = None,
     ) -> pd.DataFrame:
         return _transform_with_builder(df, self, for_linear_model, raw_dir)
+
+
+FrozenFeatureBuilder.__module__ = "src.feature_engineering"
 
 
 
