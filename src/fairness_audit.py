@@ -43,20 +43,29 @@ def _load_or_fit_full_builder(
     train_raw: pd.DataFrame,
     raw_dir: str = "data/raw/",
     builder_path: str = "artifacts/full_feature_builder.joblib",
+    processed_dir: str = "data/processed/",
+    strict_artifacts: bool = False,
 ):
     """Boundary shim for the Module 2 FrozenFeatureBuilder contract."""
+    from src.builder_artifacts import load_builder
     from src.feature_engineering import FrozenFeatureBuilder, fit_full_builder
 
     if os.path.exists(builder_path):
-        builder = joblib.load(builder_path)
+        artifact_dir = os.path.dirname(builder_path) or "."
+        builder = load_builder(
+            tier="FULL",
+            artifact_dir=artifact_dir,
+            processed_dir=processed_dir,
+            strict_artifacts=strict_artifacts,
+        )
         if not isinstance(builder, FrozenFeatureBuilder):
             raise TypeError(
                 "full_feature_builder.joblib must contain a FrozenFeatureBuilder"
             )
         return builder
 
-    builder = fit_full_builder(train_raw, raw_dir=raw_dir)
-    if builder_path != "artifacts/full_feature_builder.joblib":
+    builder = fit_full_builder(train_raw, raw_dir=raw_dir, save_path=None)
+    if builder_path:
         builder.save(builder_path)
     return builder
 
@@ -409,7 +418,9 @@ def main() -> None:
         full_builder = _load_or_fit_full_builder(
             train_raw,
             raw_dir="data/raw/",
-            builder_path="artifacts/full_feature_builder.joblib",
+            builder_path=os.path.join(ARTIFACT_DIR, "full_feature_builder.joblib"),
+            processed_dir="data/processed/",
+            strict_artifacts=True,
         )
 
         X_test_full = build_full(test_raw, full_builder, raw_dir="data/raw/")

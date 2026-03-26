@@ -27,6 +27,7 @@ from configs.config import (
     MODEL_VERSIONS,
 )
 from src.explainability import render_reason, top_5_explanations_from_shap
+from src.runtime_verification import validate_transformed_frame
 
 ROUTER_VERSION = "router_v1.0.0"
 POLICY_VERSION = "policy_v1.0.0"
@@ -695,42 +696,19 @@ def _load_validated_builders(
     processed_manifest: Mapping[str, Any],
     strict_artifacts: bool,
 ) -> Any:
-    common_kwargs = {
-        "artifact_dir": artifact_dir,
-        "processed_dir": processed_dir,
-        "processed_manifest": processed_manifest,
-        "strict_artifacts": strict_artifacts,
-    }
-
-    batch_loader_names = (
-        "load_validated_builders",
-        "load_builder_runtime",
-        "load_builders",
+    loader = getattr(builder_module, "load_validated_builders", None)
+    if not callable(loader):
+        raise RuntimeError(
+            "src.builder_artifacts.py must expose load_validated_builders(...)"
+        )
+    result = _call_with_supported_kwargs(
+        loader,
+        artifact_dir=artifact_dir,
+        processed_dir=processed_dir,
+        processed_manifest=processed_manifest,
+        strict_artifacts=strict_artifacts,
     )
-    for loader_name in batch_loader_names:
-        loader = getattr(builder_module, loader_name, None)
-        if callable(loader):
-            result = _call_with_supported_kwargs(loader, **common_kwargs)
-            return _coerce_tier_builders(result)
-
-    generic_loader = getattr(builder_module, "load_builder", None)
-    if callable(generic_loader):
-        return {
-            "FULL": _call_with_supported_kwargs(generic_loader, tier="FULL", **common_kwargs),
-            "REDUCED": _call_with_supported_kwargs(generic_loader, tier="REDUCED", **common_kwargs),
-        }
-
-    full_loader = getattr(builder_module, "load_full_builder", None)
-    reduced_loader = getattr(builder_module, "load_reduced_builder", None)
-    if callable(full_loader) and callable(reduced_loader):
-        return {
-            "FULL": _call_with_supported_kwargs(full_loader, tier="FULL", **common_kwargs),
-            "REDUCED": _call_with_supported_kwargs(reduced_loader, tier="REDUCED", **common_kwargs),
-        }
-
-    raise RuntimeError(
-        "src.builder_artifacts.py does not expose a supported builder loader/validator interface"
-    )
+    return _coerce_tier_builders(result)
 
 
 def _coerce_tier_builders(result: Any) -> dict[str, Any]:
@@ -809,9 +787,7 @@ def _validate_tier_runtime(
     smoke_payload = _build_smoke_payload(tier)
     smoke_df = build_input_df(smoke_payload, tier)
     features = _invoke_builder(builder, smoke_df)
-
-    if features.shape[0] != 1:
-        raise RuntimeError(f"{tier} builder smoke transform must return exactly one row")
+    validate_transformed_frame(features, expected_rows=1)
 
     n_features = getattr(model, "n_features_in_", None)
     if n_features is not None and int(n_features) != features.shape[1]:

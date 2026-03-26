@@ -1,4 +1,4 @@
-"""Module 1 — Data Pipeline.
+﻿"""Module 1 â€” Data Pipeline.
 
 This module handles:
 - Data loading
@@ -16,6 +16,13 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import json
+
+from src.runtime_verification import (
+    dataframe_schema_hash,
+    safe_git_commit,
+    sha256_json,
+    validate_processed_splits,
+)
 
 
 # ================================
@@ -100,7 +107,7 @@ def enforce_schema(df: pd.DataFrame, schema: dict[str, str]) -> pd.DataFrame:
 
 
 # ================================
-# TRAP D — MISSING POLICY FUNCTIONS
+# TRAP D â€” MISSING POLICY FUNCTIONS
 # ================================
 
 def fit_missing_policy(train_df: pd.DataFrame):
@@ -224,6 +231,64 @@ def build_adversarial_dataset(train_app: pd.DataFrame, test_app: pd.DataFrame):
     )
 
 
+
+
+def _build_processed_manifest(
+    train: pd.DataFrame,
+    val_model: pd.DataFrame,
+    val_policy: pd.DataFrame,
+    test: pd.DataFrame,
+    adv_train_df: pd.DataFrame,
+    adv_val_df: pd.DataFrame,
+    income_cap: float,
+) -> dict[str, object]:
+    split_verification = validate_processed_splits(
+        {
+            "train": train,
+            "val_model": val_model,
+            "val_policy": val_policy,
+            "test": test,
+        }
+    )
+    git_commit = safe_git_commit(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    manifest = {
+        "manifest_version": 1,
+        "git_commit": git_commit,
+        "application_train_cleaned_rows": int(len(train) + len(val_model) + len(val_policy) + len(test)),
+        "income_cap": float(income_cap),
+        "split_fingerprints": split_verification["split_fingerprints"],
+        "split_schema_hashes": split_verification["split_schema_hashes"],
+        "split_summary": split_verification["split_summary"],
+        "duplicate_summary": split_verification["duplicate_summary"],
+        "adversarial_summary": {
+            "adv_train_rows": int(len(adv_train_df)),
+            "adv_val_rows": int(len(adv_val_df)),
+            "diagnostic_only": True,
+            "income_cap_used": float(income_cap),
+            "git_commit": git_commit,
+            "schema_hash": dataframe_schema_hash(adv_train_df),
+        },
+    }
+    manifest["processed_manifest_fingerprint"] = sha256_json(
+        {
+            "manifest_version": manifest["manifest_version"],
+            "application_train_cleaned_rows": manifest["application_train_cleaned_rows"],
+            "income_cap": manifest["income_cap"],
+            "split_fingerprints": manifest["split_fingerprints"],
+            "split_schema_hashes": manifest["split_schema_hashes"],
+            "split_summary": manifest["split_summary"],
+            "duplicate_summary": manifest["duplicate_summary"],
+            "adversarial_summary": manifest["adversarial_summary"],
+        }
+    )
+    return manifest
+
+
+def _write_processed_manifest(path: str, manifest: dict[str, object]) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+    print(f"Saved {path}")
+
 # ================================
 # MAIN EXECUTION BLOCK
 # ================================
@@ -258,7 +323,7 @@ if __name__ == "__main__":
     app_train = enforce_schema(app_train, TRAIN_SCHEMA)
 
     # ================================
-    # TRAP A — DAYS_EMPLOYED FIX
+    # TRAP A â€” DAYS_EMPLOYED FIX
     # ================================
     app_train["DAYS_EMPLOYED_ANOM"] = (
         app_train["DAYS_EMPLOYED"] == 365243
@@ -267,7 +332,7 @@ if __name__ == "__main__":
     app_train["DAYS_EMPLOYED"] = app_train["DAYS_EMPLOYED"].replace(365243, np.nan)
 
     # ================================
-    # TRAP B — PREV_APP FIX
+    # TRAP B â€” PREV_APP FIX
     # ================================
     for col in PREV_SENTINEL_DAY_COLS:
         if col in prev_app.columns:
@@ -275,20 +340,20 @@ if __name__ == "__main__":
             prev_app[col] = prev_app[col].replace(365243, np.nan)
 
     # ================================
-    # TRAP E — SCHEMA ASSERTION
+    # TRAP E â€” SCHEMA ASSERTION
     # ================================
     assert app_train["SK_ID_CURR"].dtype == np.int64, \
         "SK_ID_CURR dtype enforcement failed"
 
     # ================================
-    # STAGE 3 — SORT + SPLIT
+    # STAGE 3 â€” SORT + SPLIT
     # ================================
     app_sorted = proxy_recency_sort(app_train)
 
     train, val_model, val_policy, test = ordered_split_60_10_10_20(app_sorted)
 
     # ================================
-    # TRAP C — INCOME CAP
+    # TRAP C â€” INCOME CAP
     # ================================
     income_cap = train["AMT_INCOME_TOTAL"].quantile(0.99)
 
@@ -340,7 +405,7 @@ if __name__ == "__main__":
     assert abs(val_dist[0] - 0.5) < 0.05
     
     # ================================
-    # STAGE 4 — DIRECTORY SETUP
+    # STAGE 4 â€” DIRECTORY SETUP
     # ================================
 
     DATA_PROCESSED_DIR = os.environ.get(
@@ -383,6 +448,21 @@ if __name__ == "__main__":
     joblib.dump(income_cap, DATA_PROCESSED_DIR + "income_cap.joblib")
     print(f"income_cap = {income_cap:.2f} saved")
 
+    processed_manifest = _build_processed_manifest(
+        train,
+        val_model,
+        val_policy,
+        test,
+        adv_train_df,
+        adv_val_df,
+        float(income_cap),
+    )
+    processed_manifest_path = os.path.join(
+        DATA_PROCESSED_DIR,
+        "processed_artifact_manifest.json",
+    )
+    _write_processed_manifest(processed_manifest_path, processed_manifest)
+
     # ================================
     # RELOAD VERIFICATION
     # ================================
@@ -415,7 +495,7 @@ if __name__ == "__main__":
     print("\nAll serialization checks passed.")
     
     # ================================
-    # STAGE 5 — EDA DIRECTORY
+    # STAGE 5 â€” EDA DIRECTORY
     # ================================
 
     EDA_PLOTS_DIR = os.environ.get(
@@ -424,7 +504,7 @@ if __name__ == "__main__":
 
     os.makedirs(EDA_PLOTS_DIR, exist_ok=True)
     
-    # Plot 1 — Target Distribution
+    # Plot 1 â€” Target Distribution
     
     fig, ax = plt.subplots(figsize=(6, 4))
     counts = train["TARGET"].value_counts().sort_index()
@@ -446,7 +526,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "target_distribution.png", dpi=150)
     plt.close()
     
-    # Plot 2 — Missing Heatmap
+    # Plot 2 â€” Missing Heatmap
     
     miss_rate = app_train.isna().mean().sort_values(ascending=False)
     miss_top = miss_rate[miss_rate > 0].head(40)
@@ -463,7 +543,7 @@ if __name__ == "__main__":
         cbar_kws={"label": "Missing rate"}
     )
 
-    ax.set_title("Missing value rates — application_train (top 40)")
+    ax.set_title("Missing value rates â€” application_train (top 40)")
     ax.set_xlabel("Column")
     plt.xticks(rotation=90, fontsize=7)
 
@@ -471,7 +551,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "missing_value_heatmap.png", dpi=150)
     plt.close()
     
-    #Plot 3 — Correlation
+    #Plot 3 â€” Correlation
     cols = ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3", "TARGET"]
     sub = train[cols].dropna()
     corr = sub.corr()
@@ -494,7 +574,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "ext_source_correlation.png", dpi=150)
     plt.close()
     
-    #Plot 4 — DAYS_EMPLOYED anomaly
+    #Plot 4 â€” DAYS_EMPLOYED anomaly
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     raw_vals = app_train["DAYS_EMPLOYED"].copy()
     raw_vals_with_sentinel = raw_vals.copy()
@@ -510,7 +590,7 @@ if __name__ == "__main__":
         edgecolor="none"
     )
 
-    axes[0].set_title("DAYS_EMPLOYED — with sentinel (365243)")
+    axes[0].set_title("DAYS_EMPLOYED â€” with sentinel (365243)")
 
     axes[1].hist(
         app_train["DAYS_EMPLOYED"].dropna(),
@@ -519,7 +599,7 @@ if __name__ == "__main__":
         edgecolor="none"
     )
 
-    axes[1].set_title("DAYS_EMPLOYED — after Trap A fix")
+    axes[1].set_title("DAYS_EMPLOYED â€” after Trap A fix")
 
     for ax in axes:
         ax.set_xlabel("Value")
@@ -531,7 +611,7 @@ if __name__ == "__main__":
     plt.savefig(EDA_PLOTS_DIR + "days_employed_anomaly.png", dpi=150)
     plt.close()
     
-    #Plot 5 — Income Outliers
+    #Plot 5 â€” Income Outliers
     
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].hist(
@@ -541,7 +621,7 @@ if __name__ == "__main__":
         edgecolor="none"
     )
 
-    axes[0].set_title("AMT_INCOME_TOTAL — raw (clipped at 2M)")
+    axes[0].set_title("AMT_INCOME_TOTAL â€” raw (clipped at 2M)")
 
     axes[1].hist(
         train["AMT_INCOME_TOTAL_CAPPED"].dropna(),
@@ -559,7 +639,7 @@ if __name__ == "__main__":
     )
 
     axes[1].legend(fontsize=9)
-    axes[1].set_title("AMT_INCOME_TOTAL — after Trap C cap")
+    axes[1].set_title("AMT_INCOME_TOTAL â€” after Trap C cap")
 
     for ax in axes:
         ax.set_xlabel("Value")
@@ -604,3 +684,4 @@ if __name__ == "__main__":
         json.dump(report, f, indent=2)
 
     print("data_quality_report.json saved")
+

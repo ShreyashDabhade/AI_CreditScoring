@@ -153,6 +153,24 @@ def test_m2_exports_support_m4_contract():
     assert callable(pool_rare_categories)
 
 
+def test_fit_full_builder_is_pure_without_save_path(tmp_path):
+    from src.feature_engineering import fit_full_builder
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [300001, 300002, 300003, 300004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+
+    project_root = Path(__file__).resolve().parents[1]
+    shared_artifacts = project_root / "artifacts"
+    before = sorted(path.name for path in shared_artifacts.iterdir()) if shared_artifacts.exists() else []
+    builder = fit_full_builder(train_df, raw_dir=str(raw_dir), save_path=None)
+    after = sorted(path.name for path in shared_artifacts.iterdir()) if shared_artifacts.exists() else []
+
+    assert builder.tier == "FULL"
+    assert before == after
+
+
 def test_m4_derives_pooled_groups_via_m2_contract(tmp_path, monkeypatch):
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
     from src.fairness_audit import derive_fairness_groups
@@ -257,3 +275,48 @@ def test_builder_shim_loads_or_fits_m2_builder_for_m4(tmp_path, monkeypatch):
     assert isinstance(built, FrozenFeatureBuilder)
     assert isinstance(loaded, FrozenFeatureBuilder)
     assert builder_path.exists()
+    assert builder_path.with_suffix(".manifest.json").exists()
+
+
+def test_builder_artifacts_strict_loader_validates_saved_builders(tmp_path):
+    import json
+
+    from src.builder_artifacts import load_validated_builders
+    from src.feature_engineering import fit_full_builder, fit_reduced_builder
+
+    artifact_dir = tmp_path / "artifacts"
+    processed_dir = tmp_path / "processed"
+    raw_dir = tmp_path / "raw"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = processed_dir / "processed_artifact_manifest.json"
+    manifest_path.write_text(
+        json.dumps({"processed_manifest_fingerprint": "fp-test-001"}),
+        encoding="utf-8",
+    )
+
+    sk_ids = [400001, 400002, 400003, 400004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+
+    fit_full_builder(
+        train_df,
+        raw_dir=str(raw_dir),
+        save_path=str(artifact_dir / "full_feature_builder.joblib"),
+        processed_manifest_path=str(manifest_path),
+    )
+    fit_reduced_builder(
+        train_df,
+        save_path=str(artifact_dir / "reduced_feature_builder.joblib"),
+        processed_manifest_path=str(manifest_path),
+    )
+
+    builders = load_validated_builders(
+        artifact_dir=str(artifact_dir),
+        processed_dir=str(processed_dir),
+        strict_artifacts=True,
+    )
+
+    assert builders["FULL"].tier == "FULL"
+    assert builders["REDUCED"].tier == "REDUCED"

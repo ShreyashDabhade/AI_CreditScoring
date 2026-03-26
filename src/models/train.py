@@ -28,6 +28,8 @@ from sklearn.metrics import accuracy_score, brier_score_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
+from src.builder_artifacts import load_validated_builders
+
 from configs.config import (
     APPROVE_THRESHOLD,
     ARTIFACT_DIR,
@@ -38,6 +40,7 @@ from configs.config import (
 )
 from src.feature_engineering import (
     ALL_AGGREGATE_FEATURE_COLS,
+    FORBIDDEN_COLS,
     FULL_FEATURE_BUILDER_ARTIFACT_PATH,
     REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
     _agg_bureau,
@@ -52,9 +55,15 @@ from src.feature_engineering import (
     fit_reduced_builder,
 )
 from src.models.runtime_support import LogisticProbabilityCalibrator, TreeShapExplainer
+from src.runtime_verification import (
+    dataframe_fingerprint,
+    load_json_object,
+    validate_transformed_frame,
+)
 
 REPRODUCIBILITY_REPORT_FILENAME = "reproducibility_report.json"
 FAIRNESS_RESULT_FILENAME = "model_fairness_audit_passed.joblib"
+PROCESSED_MANIFEST_FILENAME = "processed_artifact_manifest.json"
 RAW_TABLE_NAMES = [
     "bureau.csv",
     "previous_application.csv",
@@ -87,16 +96,56 @@ def _artifact_path(artifact_dir: str, filename: str) -> str:
     return os.path.join(artifact_dir, filename)
 
 
-def load_artifacts(artifact_dir: str = ARTIFACT_DIR) -> dict[str, Any]:
+def _builder_artifact_path(artifact_dir: str, tier: str) -> str:
+    filename = os.path.basename(
+        FULL_FEATURE_BUILDER_ARTIFACT_PATH if tier.upper() == "FULL" else REDUCED_FEATURE_BUILDER_ARTIFACT_PATH
+    )
+    return _artifact_path(artifact_dir, filename)
+
+
+def _processed_manifest_path(processed_dir: str) -> str:
+    return os.path.join(processed_dir, PROCESSED_MANIFEST_FILENAME)
+
+
+def _processed_manifest_fingerprint(processed_dir: str) -> str | None:
+    manifest_path = _processed_manifest_path(processed_dir)
+    if not os.path.exists(manifest_path):
+        return None
+    manifest = load_json_object(manifest_path, "processed manifest")
+    fingerprint = manifest.get("processed_manifest_fingerprint")
+    return str(fingerprint) if fingerprint else None
+
+
+def load_artifacts(
+    artifact_dir: str = ARTIFACT_DIR,
+    processed_dir: str = DATA_DIR,
+    strict_artifacts: bool = False,
+) -> dict[str, Any]:
+    builders = load_validated_builders(
+        artifact_dir=artifact_dir,
+        processed_dir=processed_dir,
+        strict_artifacts=strict_artifacts,
+    )
+    report_path = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
+    reproducibility_report: dict[str, Any] = {}
+    if os.path.exists(report_path):
+        reproducibility_report = load_json_object(report_path, "reproducibility report")
+    fairness_value = joblib.load(_artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME))
+    if isinstance(fairness_value, np.bool_):
+        fairness_value = bool(fairness_value)
+    if not isinstance(fairness_value, bool):
+        raise RuntimeError("model_fairness_audit_passed.joblib must contain a boolean placeholder/result")
     return {
         "full_model": joblib.load(_artifact_path(artifact_dir, "full_model.joblib")),
         "full_calibrator": joblib.load(_artifact_path(artifact_dir, "full_calibrator.joblib")),
         "full_shap_explainer": joblib.load(_artifact_path(artifact_dir, "full_shap_explainer.joblib")),
-        "full_builder": joblib.load(FULL_FEATURE_BUILDER_ARTIFACT_PATH),
+        "full_builder": builders["FULL"],
         "reduced_model": joblib.load(_artifact_path(artifact_dir, "reduced_model.joblib")),
         "reduced_calibrator": joblib.load(_artifact_path(artifact_dir, "reduced_calibrator.joblib")),
         "reduced_shap_explainer": joblib.load(_artifact_path(artifact_dir, "reduced_shap_explainer.joblib")),
-        "reduced_builder": joblib.load(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH),
+        "reduced_builder": builders["REDUCED"],
+        "model_fairness_audit_passed": fairness_value,
+        "reproducibility_report": reproducibility_report,
     }
 
 
@@ -332,7 +381,14 @@ def _generate_synthetic_bundle(n_rows: int = 3200) -> DatasetBundle:
     return _split_synthetic_frame(full_df)
 
 
-def _fit_full_builder_from_flattened(train_df: pd.DataFrame):
+def _fit_full_builder_from_flattened(
+    train_df: pd.DataFrame,
+    *,
+    source_df: pd.DataFrame | None = None,
+    save_path: str | None = None,
+    processed_manifest_fingerprint: str | None = None,
+):
+    source_frame = source_df if source_df is not None else train_df
     train_pre_model_df = _build_pre_model_frame(
         train_df,
         "FULL",
@@ -343,13 +399,26 @@ def _fit_full_builder_from_flattened(train_df: pd.DataFrame):
         train_pre_model_df,
         "FULL",
         ALL_AGGREGATE_FEATURE_COLS,
+        dataset_fingerprint=dataframe_fingerprint(source_frame),
+        fit_split_name="train",
+        processed_manifest_fingerprint=processed_manifest_fingerprint,
     )
-    builder.save(FULL_FEATURE_BUILDER_ARTIFACT_PATH)
+    if save_path is not None:
+        builder.save(save_path)
     return builder
 
 
-def _fit_reduced_builder_from_application(train_df: pd.DataFrame):
-    return fit_reduced_builder(train_df)
+def _fit_reduced_builder_from_application(
+    train_df: pd.DataFrame,
+    *,
+    save_path: str | None = None,
+    processed_manifest_path: str | None = None,
+):
+    return fit_reduced_builder(
+        train_df,
+        save_path=save_path,
+        processed_manifest_path=processed_manifest_path,
+    )
 
 
 def _build_cached_full_frames(bundle: DatasetBundle) -> dict[str, pd.DataFrame]:
@@ -379,26 +448,62 @@ def _build_cached_full_frames(bundle: DatasetBundle) -> dict[str, pd.DataFrame]:
     }
 
 
-def _build_features(bundle: DatasetBundle):
-    reduced_builder = _fit_reduced_builder_from_application(bundle.train)
+def _build_features(
+    bundle: DatasetBundle,
+    artifact_dir: str,
+    processed_dir: str,
+):
+    processed_manifest_path = _processed_manifest_path(processed_dir)
+    reduced_builder = _fit_reduced_builder_from_application(
+        bundle.train,
+        save_path=_builder_artifact_path(artifact_dir, "REDUCED"),
+        processed_manifest_path=processed_manifest_path if os.path.exists(processed_manifest_path) else None,
+    )
     train_reduced = build_reduced(bundle.train, reduced_builder)
     val_model_reduced = build_reduced(bundle.val_model, reduced_builder)
     val_policy_reduced = build_reduced(bundle.val_policy, reduced_builder)
     test_reduced = build_reduced(bundle.test, reduced_builder)
 
+    processed_manifest_fingerprint = _processed_manifest_fingerprint(processed_dir)
     if bundle.uses_flattened_full_input:
-        full_builder = _fit_full_builder_from_flattened(bundle.train)
+        full_builder = _fit_full_builder_from_flattened(
+            bundle.train,
+            source_df=bundle.train,
+            save_path=_builder_artifact_path(artifact_dir, "FULL"),
+            processed_manifest_fingerprint=processed_manifest_fingerprint,
+        )
         train_full = build_full(bundle.train, full_builder)
         val_model_full = build_full(bundle.val_model, full_builder)
         val_policy_full = build_full(bundle.val_policy, full_builder)
         test_full = build_full(bundle.test, full_builder)
     else:
         full_frames = _build_cached_full_frames(bundle)
-        full_builder = _fit_full_builder_from_flattened(full_frames["train"])
+        full_builder = _fit_full_builder_from_flattened(
+            full_frames["train"],
+            source_df=bundle.train,
+            save_path=_builder_artifact_path(artifact_dir, "FULL"),
+            processed_manifest_fingerprint=processed_manifest_fingerprint,
+        )
         train_full = build_full(full_frames["train"], full_builder)
         val_model_full = build_full(full_frames["val_model"], full_builder)
         val_policy_full = build_full(full_frames["val_policy"], full_builder)
         test_full = build_full(full_frames["test"], full_builder)
+
+    for frame_name, frame, builder in [
+        ("train_full", train_full, full_builder),
+        ("val_model_full", val_model_full, full_builder),
+        ("val_policy_full", val_policy_full, full_builder),
+        ("test_full", test_full, full_builder),
+        ("train_reduced", train_reduced, reduced_builder),
+        ("val_model_reduced", val_model_reduced, reduced_builder),
+        ("val_policy_reduced", val_policy_reduced, reduced_builder),
+        ("test_reduced", test_reduced, reduced_builder),
+    ]:
+        validate_transformed_frame(
+            frame,
+            expected_columns=builder.encoded_columns_,
+            forbidden_columns=FORBIDDEN_COLS,
+        )
 
     return {
         "full_builder": full_builder,
@@ -596,7 +701,7 @@ def train_models(
     else:
         bundle = _generate_synthetic_bundle()
 
-    features = _build_features(bundle)
+    features = _build_features(bundle, artifact_dir, processed_dir)
     y_train = bundle.train["TARGET"].to_numpy(dtype=int)
     y_val_model = bundle.val_model["TARGET"].to_numpy(dtype=int)
     y_val_policy = bundle.val_policy["TARGET"].to_numpy(dtype=int)
@@ -627,24 +732,28 @@ def train_models(
         artifact_dir,
     )
 
-    joblib.dump(True, _artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME))
+    joblib.dump(False, _artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME))
 
     report = {
         "mode": bundle.mode,
         "random_state": RANDOM_STATE,
+        "model_family": "xgboost",
+        "model_version": MODEL_VERSIONS["full"],
+        "deployed_model_version": MODEL_VERSIONS["full"],
+        "full_model_version": MODEL_VERSIONS["full"],
+        "reduced_model_version": MODEL_VERSIONS["reduced"],
+        "metrics": full_result["metrics"],
+        "reduced_metrics": reduced_result["metrics"],
         "sample_counts": {
             "train": int(len(bundle.train)),
             "val_model": int(len(bundle.val_model)),
             "val_policy": int(len(bundle.val_policy)),
             "test": int(len(bundle.test)),
         },
-        "model_version": MODEL_VERSIONS["full"],
-        "metrics": full_result["metrics"],
-        "reduced_metrics": reduced_result["metrics"],
-        "full_model_version": MODEL_VERSIONS["full"],
-        "reduced_model_version": MODEL_VERSIONS["reduced"],
+        "processed_manifest_fingerprint": _processed_manifest_fingerprint(processed_dir),
         "tiers": {
             "FULL": {
+                "model_family": "xgboost",
                 "model_version": MODEL_VERSIONS["full"],
                 "metrics": full_result["metrics"],
                 "selection": {
@@ -654,8 +763,15 @@ def train_models(
                     "calibrator": full_result["selected_calibrator"],
                     "val_policy_calibration_metrics": full_result["val_policy_calibration_metrics"],
                 },
+                "artifacts": {
+                    "builder": _builder_artifact_path(artifact_dir, "FULL"),
+                    "model": _artifact_path(artifact_dir, "full_model.joblib"),
+                    "calibrator": _artifact_path(artifact_dir, "full_calibrator.joblib"),
+                    "explainer": _artifact_path(artifact_dir, "full_shap_explainer.joblib"),
+                },
             },
             "REDUCED": {
+                "model_family": "xgboost",
                 "model_version": MODEL_VERSIONS["reduced"],
                 "metrics": reduced_result["metrics"],
                 "selection": {
@@ -665,35 +781,28 @@ def train_models(
                     "calibrator": reduced_result["selected_calibrator"],
                     "val_policy_calibration_metrics": reduced_result["val_policy_calibration_metrics"],
                 },
+                "artifacts": {
+                    "builder": _builder_artifact_path(artifact_dir, "REDUCED"),
+                    "model": _artifact_path(artifact_dir, "reduced_model.joblib"),
+                    "calibrator": _artifact_path(artifact_dir, "reduced_calibrator.joblib"),
+                    "explainer": _artifact_path(artifact_dir, "reduced_shap_explainer.joblib"),
+                },
             },
         },
-        "selection": {
-            "candidate": full_result["selected_candidate"],
-            "val_model_roc_auc": full_result["val_model_roc_auc"],
-            "params": full_result["selected_params"],
-            "calibrator": full_result["selected_calibrator"],
-            "val_policy_calibration_metrics": full_result["val_policy_calibration_metrics"],
-        },
         "artifacts": {
-            "full_builder": FULL_FEATURE_BUILDER_ARTIFACT_PATH,
-            "reduced_builder": REDUCED_FEATURE_BUILDER_ARTIFACT_PATH,
-            "full_model": _artifact_path(artifact_dir, "full_model.joblib"),
-            "full_calibrator": _artifact_path(artifact_dir, "full_calibrator.joblib"),
-            "full_shap_explainer": _artifact_path(artifact_dir, "full_shap_explainer.joblib"),
-            "reduced_model": _artifact_path(artifact_dir, "reduced_model.joblib"),
-            "reduced_calibrator": _artifact_path(artifact_dir, "reduced_calibrator.joblib"),
-            "reduced_shap_explainer": _artifact_path(artifact_dir, "reduced_shap_explainer.joblib"),
             "fairness_result": _artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME),
+            "reproducibility_report": _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME),
         },
         "notes": [
             "Synthetic fallback is used when local processed/raw data artifacts are unavailable.",
+            "This stabilized branch trains XGBoost candidate grids only; Logistic Regression and LightGBM are not evaluated by the current source.",
             "Validation model split is used for candidate selection; validation policy split is used for probability calibration.",
-            "Accuracy is measured on the held-out test split using the DECLINE threshold as the positive-class cutoff.",
+            "Module 3 writes model_fairness_audit_passed.joblib as a False placeholder. Module 4 owns the final overwrite.",
             "Both FULL and REDUCED artifact stacks are trained and persisted in the same run.",
         ],
     }
-    report_path = _write_reproducibility_report(artifact_dir, report)
-    report["report_path"] = report_path
+    report["report_path"] = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
+    _write_reproducibility_report(artifact_dir, report)
     return report
 
 

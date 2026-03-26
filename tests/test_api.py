@@ -498,3 +498,30 @@ def test_real_mode_score_application_only_uses_reduced_artifacts(tmp_path, monke
     payload = response.get_json()
     assert payload["coverage_tier"] == "REDUCED"
     assert payload["model_version"] == "deployed-reduced-2026.03"
+
+
+def test_real_mode_score_full_payload_uses_full_artifacts(tmp_path, monkeypatch):
+    artifact_dir = tmp_path / "artifacts"
+    processed_dir = tmp_path / "processed"
+    _write_processed_manifest(processed_dir)
+    _write_real_artifacts(artifact_dir)
+
+    def loader(**kwargs):
+        return {
+            "full_builder": SavedBuilderFixture("FULL"),
+            "reduced_builder": SavedBuilderFixture("REDUCED"),
+        }
+
+    _install_fake_builder_module(monkeypatch, loader)
+    app = create_app(
+        artifact_dir=str(artifact_dir),
+        processed_dir=str(processed_dir),
+        mock_mode=False,
+    )
+
+    response = app.test_client().post("/score", json=_make_full_payload())
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["coverage_tier"] == "FULL"
+    assert payload["model_version"] == "deployed-full-2026.03"

@@ -4,6 +4,8 @@
 Module 5 exposes the scoring API as the terminal consumer of the repaired offline workflow.
 
 - `create_app()` eagerly validates and loads the artifact stack once in real mode.
+- `GET /` serves the bundled Flask demo UI.
+- `GET /demo` serves the same demo frontend explicitly.
 - `POST /score` validates payloads, routes FULL vs REDUCED coverage, transforms through loaded builders, scores, calibrates, decides, explains, and returns the exact 9-field response.
 - `GET /health` reports runtime availability and deployed model metadata.
 

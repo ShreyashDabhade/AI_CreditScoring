@@ -8,6 +8,8 @@
     "score_request(payload: dict, runtime: dict, mock_mode: bool = false) -> dict"
   ],
   "routes": [
+    "GET /",
+    "GET /demo",
     "GET /health",
     "POST /score"
   ],

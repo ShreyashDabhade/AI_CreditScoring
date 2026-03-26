@@ -1,5 +1,8 @@
 # Documentation
 Documentation/
+!Documentation/
+Documentation/*
+!Documentation/artifact_contract.md
 
 # Python
 __pycache__/
