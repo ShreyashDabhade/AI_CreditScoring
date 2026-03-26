@@ -57,13 +57,21 @@ Mock mode for local bring-up and tests:
 python -c "from src.api.app import create_app; app = create_app(mock_mode=True); app.run(host='127.0.0.1', port=5000)"
 ```
 
+Alternate entrypoint:
+
+```bash
+set MASTERMIND_MOCK_MODE=true
+python app.py
+```
+
 Mock mode is for local development and tests only. It uses temp-scoped runtime locations by default and must not be treated as a production scoring path.
 
-Frontend demo:
+Frontend UI:
 
-- Open `/` or `/demo` after the Flask app starts.
-- The demo frontend is served by the same Flask app and sends real requests to `/health` and `/score`.
-- It is a scratch-built UI for testing the complete backend pipeline, not a separate scoring implementation.
+- Open `/` for the home page, `/analyze` for the tier-aware scoring workflow, and `/status` for the health dashboard.
+- `/demo` remains available as a compatibility alias to the analysis experience.
+- The frontend is served by the same Flask app and sends real requests to `/health` and `/score`.
+- The UI is intentionally limited to the scoring workflow: request payload entry, API call, and response visualization.
 
 ## Running API Tests
 

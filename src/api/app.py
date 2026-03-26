@@ -7,6 +7,7 @@ import importlib
 import inspect
 import json
 import os
+from pathlib import Path
 import re
 import tempfile
 from types import MappingProxyType, ModuleType
@@ -35,7 +36,10 @@ RUNTIME_EXTENSION_KEY = "mastermind_runtime"
 PROCESSED_MANIFEST_FILENAME = "processed_artifact_manifest.json"
 REPRODUCIBILITY_REPORT_FILENAME = "reproducibility_report.json"
 FAIRNESS_RESULT_FILENAME = "model_fairness_audit_passed.joblib"
-DEMO_DEFAULT_TIER = "FULL"
+UI_DEFAULT_TIER = "REDUCED"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TEMPLATE_DIR = PROJECT_ROOT / "templates"
+STATIC_DIR = PROJECT_ROOT / "static"
 CATEGORICAL_APPLICATION_FIELDS = frozenset(
     {
         "NAME_CONTRACT_TYPE",
@@ -45,6 +49,28 @@ CATEGORICAL_APPLICATION_FIELDS = frozenset(
         "OCCUPATION_TYPE",
         "ORGANIZATION_TYPE",
         "WEEKDAY_APPR_PROCESS_START",
+    }
+)
+SECTION_DESCRIPTIONS: Mapping[str, str] = MappingProxyType(
+    {
+        "application": (
+            "Required applicant and application fields sent in both REDUCED and FULL scoring requests."
+        ),
+        "bureau_agg": (
+            "External bureau summary features used only when the FULL tier is supplied."
+        ),
+        "previous_agg": (
+            "Historical previous-application aggregates required for FULL coverage."
+        ),
+        "installments_agg": (
+            "Installment repayment behavior features used by the FULL model."
+        ),
+        "pos_cash_agg": (
+            "Point-of-sale cash balance and delinquency aggregates for FULL scoring."
+        ),
+        "credit_card_agg": (
+            "Credit-card utilization and delinquency aggregates required for FULL scoring."
+        ),
     }
 )
 DEMO_FIELD_OPTIONS: Mapping[str, tuple[str, ...]] = MappingProxyType(
@@ -340,29 +366,51 @@ def create_app(
         )
     )
 
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    app = Flask(
+        __name__,
+        template_folder=str(TEMPLATE_DIR),
+        static_folder=str(STATIC_DIR),
+    )
     app.extensions[RUNTIME_EXTENSION_KEY] = runtime
 
     @app.get("/")
-    @app.get("/demo")
-    def demo():
+    def home():
         loaded_runtime = _get_runtime(app)
         return render_template(
-            "demo.html",
-            demo_config=_build_demo_config(loaded_runtime),
+            "index.html",
+            page_title="MasterMind Credit Scoring",
+            active_nav="home",
+            ui_config=_build_ui_config(loaded_runtime),
+            health_snapshot=_build_health_snapshot(loaded_runtime),
+        )
+
+    @app.get("/analyze")
+    @app.get("/demo")
+    def analyze():
+        loaded_runtime = _get_runtime(app)
+        return render_template(
+            "analyze.html",
+            page_title="Credit Analysis",
+            active_nav="analyze",
+            ui_config=_build_ui_config(loaded_runtime),
+            health_snapshot=_build_health_snapshot(loaded_runtime),
+        )
+
+    @app.get("/status")
+    def status_page():
+        loaded_runtime = _get_runtime(app)
+        return render_template(
+            "status.html",
+            page_title="System Status",
+            active_nav="status",
+            ui_config=_build_ui_config(loaded_runtime),
+            health_snapshot=_build_health_snapshot(loaded_runtime),
         )
 
     @app.get("/health")
     def health():
         loaded_runtime = _get_runtime(app)
-        return jsonify(
-            {
-                "status": "ok",
-                "model_version": loaded_runtime.health_model_version,
-                "fairness_audit_passed": loaded_runtime.model_fairness_audit_passed,
-                "coverage_tiers_available": list(loaded_runtime.coverage_tiers_available),
-            }
-        )
+        return jsonify(_build_health_snapshot(loaded_runtime))
 
     @app.post("/score")
     def score():
@@ -930,7 +978,7 @@ def _build_demo_seed_payload() -> dict[str, Any]:
     }
 
 
-def _build_demo_config(runtime: ApiRuntime) -> dict[str, Any]:
+def _build_ui_config(runtime: ApiRuntime) -> dict[str, Any]:
     sample_payload = _build_demo_seed_payload()
     sections: list[dict[str, Any]] = []
 
@@ -946,6 +994,7 @@ def _build_demo_config(runtime: ApiRuntime) -> dict[str, Any]:
             fields.append(
                 {
                     "name": field_name,
+                    "label": field_name,
                     "kind": field_kind,
                     "options": list(DEMO_FIELD_OPTIONS.get(field_name, ())),
                 }
@@ -954,6 +1003,7 @@ def _build_demo_config(runtime: ApiRuntime) -> dict[str, Any]:
             {
                 "name": section_name,
                 "label": section_name.replace("_", " ").title(),
+                "description": SECTION_DESCRIPTIONS[section_name],
                 "fields": fields,
             }
         )
@@ -964,7 +1014,8 @@ def _build_demo_config(runtime: ApiRuntime) -> dict[str, Any]:
         "scoreModelVersions": dict(runtime.tier_model_versions),
         "fairnessAuditPassed": runtime.model_fairness_audit_passed,
         "fairnessAuditVersion": FAIRNESS_AUDIT_VERSION,
-        "defaultTier": "REDUCED",
+        "defaultTier": UI_DEFAULT_TIER,
+        "availableTiers": list(runtime.coverage_tiers_available),
         "sections": sections,
         "samplePayloads": {
             "FULL": sample_payload,
@@ -973,7 +1024,23 @@ def _build_demo_config(runtime: ApiRuntime) -> dict[str, Any]:
         "routes": {
             "health": "/health",
             "score": "/score",
+            "home": "/",
+            "analyze": "/analyze",
+            "status": "/status",
         },
+        "policyThresholds": {
+            "approve": APPROVE_THRESHOLD,
+            "decline": DECLINE_THRESHOLD,
+        },
+    }
+
+
+def _build_health_snapshot(runtime: ApiRuntime) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "model_version": runtime.health_model_version,
+        "fairness_audit_passed": runtime.model_fairness_audit_passed,
+        "coverage_tiers_available": list(runtime.coverage_tiers_available),
     }
 
 

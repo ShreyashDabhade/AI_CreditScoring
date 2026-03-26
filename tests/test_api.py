@@ -210,16 +210,22 @@ def test_health_returns_required_fields():
     assert payload["coverage_tiers_available"] == ["FULL", "REDUCED"]
 
 
-def test_demo_routes_render_frontend():
+def test_frontend_routes_render_credit_scoring_ui():
     client = create_app(mock_mode=True).test_client()
 
     root_response = client.get("/")
+    analyze_response = client.get("/analyze")
+    status_response = client.get("/status")
     demo_response = client.get("/demo")
 
     assert root_response.status_code == 200
+    assert analyze_response.status_code == 200
+    assert status_response.status_code == 200
     assert demo_response.status_code == 200
-    assert "MasterMind Demo Console" in root_response.get_data(as_text=True)
-    assert "window.__MASTERMIND_DEMO__" in demo_response.get_data(as_text=True)
+    assert "MasterMind Credit Scoring" in root_response.get_data(as_text=True)
+    assert "window.__MASTERMIND_UI__" in analyze_response.get_data(as_text=True)
+    assert "System Status" in status_response.get_data(as_text=True)
+    assert "Credit Analysis" in demo_response.get_data(as_text=True)
 
 
 def test_score_application_only_returns_200_for_reduced():
