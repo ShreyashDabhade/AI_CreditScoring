@@ -72,7 +72,7 @@ from src.runtime_verification import (
 )
 
 REPRODUCIBILITY_REPORT_FILENAME = "reproducibility_report.json"
-BLEND_EXPERIMENT_REPORT_FILENAME = "blend_experiment_report.json"
+META_BLEND_EXPERIMENT_REPORT_FILENAME = "meta_blend_experiment_report.json"
 FAIRNESS_RESULT_FILENAME = "model_fairness_audit_passed.joblib"
 PROCESSED_MANIFEST_FILENAME = "processed_artifact_manifest.json"
 RAW_TABLE_NAMES = [
@@ -860,13 +860,20 @@ def _fit_logistic_meta_blend(
     y_true: np.ndarray,
     pred_xgb: np.ndarray,
     pred_lgbm: np.ndarray,
+    *,
+    regularization_c: float = 1.0,
 ) -> dict[str, Any]:
     meta_X = np.column_stack([pred_xgb, pred_lgbm])
-    meta = LogisticRegression(solver="liblinear", random_state=RANDOM_STATE)
+    meta = LogisticRegression(
+        solver="liblinear",
+        random_state=RANDOM_STATE,
+        C=float(regularization_c),
+    )
     meta.fit(meta_X, y_true)
     raw_pd = meta.predict_proba(meta_X)[:, 1]
     return {
         "meta_model": meta,
+        "regularization_c": float(regularization_c),
         "val_model_roc_auc": float(roc_auc_score(y_true, raw_pd)),
         "val_model_raw_pd": raw_pd,
     }
@@ -1115,44 +1122,25 @@ def _train_full_runtime_candidate(
     }
 
 
-def _write_blend_experiment_report(artifact_dir: str, report: dict[str, Any]) -> str:
-    path = _artifact_path(artifact_dir, BLEND_EXPERIMENT_REPORT_FILENAME)
+def _write_meta_blend_experiment_report(artifact_dir: str, report: dict[str, Any]) -> str:
+    path = _artifact_path(artifact_dir, META_BLEND_EXPERIMENT_REPORT_FILENAME)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, indent=2)
     return path
 
 
-def _annotate_reproducibility_report_with_blend_evaluation(
-    artifact_dir: str,
-    *,
-    evaluated: bool,
-    blend_report_path: str | None = None,
-    best_candidate: str | None = None,
-) -> None:
-    report_path = _artifact_path(artifact_dir, REPRODUCIBILITY_REPORT_FILENAME)
-    if not os.path.exists(report_path):
-        return
-    report = load_json_object(report_path, "reproducibility report")
-    report["blend_evaluation"] = {
-        "evaluated": bool(evaluated),
-        "report_path": blend_report_path,
-        "best_candidate": best_candidate,
-        "deployed": False,
-    }
-    _write_reproducibility_report(artifact_dir, report)
-
-
-def run_blend_experiments(
+def run_regularized_meta_blend_experiments(
     artifact_dir: str = ARTIFACT_DIR,
     processed_dir: str = DATA_DIR,
     raw_dir: str = "data/raw/",
     full_feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
+    regularization_grid: tuple[float, ...] = (0.01, 0.1, 1.0),
 ) -> dict[str, Any]:
     if not _has_real_training_inputs(processed_dir, raw_dir):
-        raise RuntimeError("Blend experiments require real processed splits and raw aggregate tables.")
+        raise RuntimeError("Meta-blend experiments require real processed splits and raw aggregate tables.")
 
     bundle = _load_real_bundle(processed_dir, raw_dir)
-    with tempfile.TemporaryDirectory(prefix="blend_experiment_build_") as temp_root:
+    with tempfile.TemporaryDirectory(prefix="meta_blend_experiment_build_") as temp_root:
         features = _build_features(bundle, temp_root, processed_dir, full_feature_view=full_feature_view)
         y_train = bundle.train["TARGET"].to_numpy(dtype=int)
         y_val_model = bundle.val_model["TARGET"].to_numpy(dtype=int)
@@ -1185,9 +1173,6 @@ def run_blend_experiments(
         lgbm_val_policy_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], features["val_policy_full"])
         lgbm_test_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], features["test_full"])
 
-        xgb_eval = _evaluate_calibrated_scores(y_val_policy, xgb_val_policy_raw, y_test, xgb_test_raw)
-        lgbm_eval = _evaluate_calibrated_scores(y_val_policy, lgbm_val_policy_raw, y_test, lgbm_test_raw)
-
         weighted = _select_weighted_average_blend(
             y_val_model,
             xgb_result["val_model_raw_pd"],
@@ -1197,58 +1182,65 @@ def run_blend_experiments(
         weighted_test_raw = weighted["weight_xgb"] * xgb_test_raw + weighted["weight_lgbm"] * lgbm_test_raw
         weighted_eval = _evaluate_calibrated_scores(y_val_policy, weighted_val_policy_raw, y_test, weighted_test_raw)
 
-        meta = _fit_logistic_meta_blend(
-            y_val_model,
-            xgb_result["val_model_raw_pd"],
-            lgbm_result["val_model_raw_pd"],
-        )
-        meta_val_policy_raw = meta["meta_model"].predict_proba(np.column_stack([xgb_val_policy_raw, lgbm_val_policy_raw]))[:, 1]
-        meta_test_raw = meta["meta_model"].predict_proba(np.column_stack([xgb_test_raw, lgbm_test_raw]))[:, 1]
-        meta_eval = _evaluate_calibrated_scores(y_val_policy, meta_val_policy_raw, y_test, meta_test_raw)
-
-        candidates = {
-            "xgboost_full": {
-                "model_family": "xgboost",
-                "val_model_roc_auc": float(xgb_result["val_model_roc_auc"]),
-                "test_metrics": xgb_eval["metrics"],
-                "selected_candidate": xgb_result["selected_candidate"],
-                "selected_params": xgb_result["selected_params"],
-                "selected_calibrator": xgb_eval["selected_calibrator"],
-                "val_policy_calibration_metrics": xgb_eval["val_policy_calibration_metrics"],
+        weighted_candidate = {
+            "model_family": "blend",
+            "blend_method": "weighted_average",
+            "weights": {
+                "xgboost": float(weighted["weight_xgb"]),
+                "lightgbm": float(weighted["weight_lgbm"]),
             },
-            "lightgbm_full": {
-                "model_family": "lightgbm",
-                "val_model_roc_auc": float(lgbm_result["val_model_roc_auc"]),
-                "test_metrics": lgbm_eval["metrics"],
-                "selected_candidate": lgbm_result["selected_candidate"],
-                "selected_params": lgbm_result["selected_params"],
-                "selected_calibrator": lgbm_eval["selected_calibrator"],
-                "val_policy_calibration_metrics": lgbm_eval["val_policy_calibration_metrics"],
-            },
-            "weighted_blend_full": {
-                "model_family": "blend",
-                "blend_method": "weighted_average",
-                "weights": {
-                    "xgboost": float(weighted["weight_xgb"]),
-                    "lightgbm": float(weighted["weight_lgbm"]),
+            "val_model_roc_auc": float(weighted["val_model_roc_auc"]),
+            "test_metrics": weighted_eval["metrics"],
+            "selected_calibrator": weighted_eval["selected_calibrator"],
+            "val_policy_calibration_metrics": weighted_eval["val_policy_calibration_metrics"],
+            "component_selection": {
+                "xgboost": {
+                    "candidate": xgb_result["selected_candidate"],
+                    "params": xgb_result["selected_params"],
                 },
-                "val_model_roc_auc": float(weighted["val_model_roc_auc"]),
-                "test_metrics": weighted_eval["metrics"],
-                "selected_calibrator": weighted_eval["selected_calibrator"],
-                "val_policy_calibration_metrics": weighted_eval["val_policy_calibration_metrics"],
+                "lightgbm": {
+                    "candidate": lgbm_result["selected_candidate"],
+                    "params": lgbm_result["selected_params"],
+                },
             },
-            "logistic_meta_blend_full": {
+        }
+
+        candidates: dict[str, dict[str, Any]] = {
+            "weighted_blend_full": weighted_candidate,
+        }
+        best_meta_candidate_name: str | None = None
+        best_meta_candidate: dict[str, Any] | None = None
+        for regularization_c in regularization_grid:
+            meta = _fit_logistic_meta_blend(
+                y_val_model,
+                xgb_result["val_model_raw_pd"],
+                lgbm_result["val_model_raw_pd"],
+                regularization_c=regularization_c,
+            )
+            meta_inputs_val_policy = np.column_stack([xgb_val_policy_raw, lgbm_val_policy_raw])
+            meta_inputs_test = np.column_stack([xgb_test_raw, lgbm_test_raw])
+            meta_val_policy_raw = meta["meta_model"].predict_proba(meta_inputs_val_policy)[:, 1]
+            meta_test_raw = meta["meta_model"].predict_proba(meta_inputs_test)[:, 1]
+            meta_eval = _evaluate_calibrated_scores(y_val_policy, meta_val_policy_raw, y_test, meta_test_raw)
+            candidate_name = f"logistic_meta_blend_full_c_{str(regularization_c).replace('.', '_')}"
+            candidate_payload = {
                 "model_family": "blend",
                 "blend_method": "logistic_meta",
+                "regularization_c": float(regularization_c),
                 "val_model_roc_auc": float(meta["val_model_roc_auc"]),
                 "test_metrics": meta_eval["metrics"],
                 "selected_calibrator": meta_eval["selected_calibrator"],
                 "val_policy_calibration_metrics": meta_eval["val_policy_calibration_metrics"],
                 "meta_coefficients": meta["meta_model"].coef_.tolist(),
                 "meta_intercept": meta["meta_model"].intercept_.tolist(),
-            },
-        }
+                "base_inputs": ["xgboost_full_pd", "lightgbm_full_pd"],
+            }
+            candidates[candidate_name] = candidate_payload
+            if best_meta_candidate is None or candidate_payload["val_model_roc_auc"] > best_meta_candidate["val_model_roc_auc"]:
+                best_meta_candidate_name = candidate_name
+                best_meta_candidate = candidate_payload
 
+        assert best_meta_candidate_name is not None and best_meta_candidate is not None
         best_candidate_name = max(
             candidates.items(),
             key=lambda item: item[1]["val_model_roc_auc"],
@@ -1256,27 +1248,27 @@ def run_blend_experiments(
 
         report = {
             "mode": bundle.mode,
+            "offline_only": True,
             "processed_manifest_fingerprint": _processed_manifest_fingerprint(processed_dir),
             "full_feature_view": full_feature_view,
             "single_model_runtime_unchanged": True,
-            "candidates": candidates,
+            "runtime_baseline_reference": {
+                "candidate": "weighted_blend_full",
+                "model_version": FULL_WEIGHTED_BLEND_MODEL_VERSION,
+            },
+            "weighted_blend_baseline": weighted_candidate,
+            "best_meta_candidate_by_val_model": best_meta_candidate_name,
             "best_candidate_by_val_model": best_candidate_name,
-            "baseline_full_xgboost_test_roc_auc": float(candidates["xgboost_full"]["test_metrics"]["roc_auc"]),
-            "baseline_reduced_xgboost_test_roc_auc": None,
+            "candidates": candidates,
             "notes": [
-                "Blend experiments are offline-only and do not replace the default runtime artifact stack.",
-                "val_model is used for family and blend selection; val_policy is used for calibration; test is final confirmation only.",
+                "Meta-blend experiments are offline-only and do not replace the default runtime artifact stack.",
+                "val_model is used for meta-learner fitting and candidate comparison; val_policy is used for calibration; test is final confirmation only.",
+                "Base meta inputs are the FULL XGBoost and FULL LightGBM probabilities.",
             ],
         }
 
-    blend_report_path = _write_blend_experiment_report(artifact_dir, report)
-    _annotate_reproducibility_report_with_blend_evaluation(
-        artifact_dir,
-        evaluated=True,
-        blend_report_path=blend_report_path,
-        best_candidate=best_candidate_name,
-    )
-    report["report_path"] = blend_report_path
+    report_path = _write_meta_blend_experiment_report(artifact_dir, report)
+    report["report_path"] = report_path
     return report
 
 

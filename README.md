@@ -16,7 +16,7 @@ Real mode is strict and fail-fast. Startup is expected to fail if processed line
 
 The corrected forward proxy-time regime from the repaired workflow supersedes earlier split-based metrics. Old quarantined artifacts must not be reused.
 
-`artifacts/blend_experiment_report.json`, `artifacts/fairness_aware_modeling_experiment_report.json`, and `artifacts/subgroup_calibration_experiment_report.json` are offline-only experiment reports and are not live runtime inputs.
+`artifacts/meta_blend_experiment_report.json`, `artifacts/fairness_aware_modeling_experiment_report.json`, and `artifacts/subgroup_calibration_experiment_report.json` are offline-only experiment reports and are not live runtime inputs.
 
 ## Installation
 

@@ -19,27 +19,6 @@ def test_weighted_average_blend_can_choose_interior_weight():
     np.testing.assert_allclose(result["weight_xgb"] + result["weight_lgbm"], 1.0)
     assert result["val_model_roc_auc"] >= 0.5
 
-
-def test_reproducibility_report_annotation_updates_blend_status(tmp_path):
-    from src.models.train import _annotate_reproducibility_report_with_blend_evaluation
-
-    artifact_dir = tmp_path / "artifacts"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    report_path = artifact_dir / "reproducibility_report.json"
-    report_path.write_text(json.dumps({"mode": "real", "blend_evaluation": {"evaluated": False, "report_path": None, "best_candidate": None, "deployed": False}}), encoding="utf-8")
-
-    _annotate_reproducibility_report_with_blend_evaluation(
-        str(artifact_dir),
-        evaluated=True,
-        blend_report_path=str(artifact_dir / "blend_experiment_report.json"),
-        best_candidate="weighted_blend_full",
-    )
-
-    updated = json.loads(report_path.read_text(encoding="utf-8"))
-    assert updated["blend_evaluation"]["evaluated"] is True
-    assert updated["blend_evaluation"]["best_candidate"] == "weighted_blend_full"
-
-
 class _StaticProbModel:
     def __init__(self, probs):
         self._probs = np.asarray(probs, dtype=float)

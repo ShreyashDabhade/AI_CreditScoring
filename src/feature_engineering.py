@@ -84,6 +84,17 @@ ENGINEERED_APP_FEATURE_COLS = [
     "ID_PUBLISH_REG_RATIO",
     "EXT_SOURCE_MEAN",
     "EXT_SOURCE_STD",
+    "EXT_12_PRODUCT",
+    "EXT_13_PRODUCT",
+    "EXT_23_PRODUCT",
+    "EXT_123_PRODUCT",
+    "EXT_12_DIFF",
+    "EXT_13_DIFF",
+    "EXT_23_DIFF",
+    "EXT_MIN",
+    "EXT_MAX",
+    "EXT_RANGE",
+    "EXT_SOURCE_COUNT",
     "SOCIAL_CIRCLE_SUM",
     "BUREAU_REQUEST_SUM",
     "DAYS_EMPLOYED_ANOM",
@@ -361,6 +372,10 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     assert "AMT_INCOME_TOTAL_CAPPED" in df.columns, "AMT_INCOME_TOTAL_CAPPED missing - Module 1 not applied"
     assert "DAYS_EMPLOYED_ANOM" in df.columns, "DAYS_EMPLOYED_ANOM missing - Module 1 Trap A not applied"
+    ext_cols = ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]
+    ext1 = df["EXT_SOURCE_1"]
+    ext2 = df["EXT_SOURCE_2"]
+    ext3 = df["EXT_SOURCE_3"]
     df["AGE_YEARS"] = -df["DAYS_BIRTH"] / 365
     df["CREDIT_INCOME_RATIO"] = safe_div(df["AMT_CREDIT"], df["AMT_INCOME_TOTAL_CAPPED"] )
     df["ANNUITY_INCOME_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_INCOME_TOTAL_CAPPED"] )
@@ -368,8 +383,19 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     df["CREDIT_TERM_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_CREDIT"])
     df["EMPLOYED_BIRTH_RATIO"] = safe_div(df["DAYS_EMPLOYED"], df["DAYS_BIRTH"])
     df["ID_PUBLISH_REG_RATIO"] = safe_div(df["DAYS_ID_PUBLISH"], df["DAYS_REGISTRATION"])
-    df["EXT_SOURCE_MEAN"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].mean(axis=1)
-    df["EXT_SOURCE_STD"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].std(axis=1)
+    df["EXT_SOURCE_MEAN"] = df[ext_cols].mean(axis=1)
+    df["EXT_SOURCE_STD"] = df[ext_cols].std(axis=1)
+    df["EXT_12_PRODUCT"] = ext1 * ext2
+    df["EXT_13_PRODUCT"] = ext1 * ext3
+    df["EXT_23_PRODUCT"] = ext2 * ext3
+    df["EXT_123_PRODUCT"] = df[ext_cols].prod(axis=1, min_count=len(ext_cols))
+    df["EXT_12_DIFF"] = ext1 - ext2
+    df["EXT_13_DIFF"] = ext1 - ext3
+    df["EXT_23_DIFF"] = ext2 - ext3
+    df["EXT_MIN"] = df[ext_cols].min(axis=1)
+    df["EXT_MAX"] = df[ext_cols].max(axis=1)
+    df["EXT_RANGE"] = df["EXT_MAX"] - df["EXT_MIN"]
+    df["EXT_SOURCE_COUNT"] = df[ext_cols].notna().sum(axis=1).astype("int8")
     df["SOCIAL_CIRCLE_SUM"] = (
         df["OBS_30_CNT_SOCIAL_CIRCLE"].fillna(0)
         + df["DEF_30_CNT_SOCIAL_CIRCLE"].fillna(0)
