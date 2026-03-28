@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">System Health</p>
+        <h1>Service Status</h1>
+        <p class="page-intro">Live status from the MasterMind AI scoring API.</p>
+    </div>
+</section>
+
+<section class="section section-mid">
+    <div class="section-shell">
+        <div class="status-panel">
+            <div class="status-row">
+                <span class="status-label">System Status</span>
+                <span class="status-value" id="status-system">
+                    <span class="status-dot ok"></span>
+                    Operational
+                </span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Model Version</span>
+                <span class="status-value monospace" id="status-version">{{ health_snapshot.model_version }}</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Fairness Audit</span>
+                <span class="status-value fairness-pass" id="status-fairness">{{ "Passed" if health_snapshot.fairness_audit_passed else "Not passed" }}</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Coverage Tiers</span>
+                <span class="status-value" id="status-tiers">{{ health_snapshot.coverage_tiers_available | join(", ") }}</span>
+            </div>
+            <p class="status-error is-hidden" id="status-error">Unable to reach the scoring API. Check that the server is running.</p>
+        </div>
+    </div>
+</section>
+
+<section class="section section-base" id="api-reference">
+    <div class="section-shell api-reference">
+        <h2>API Endpoints</h2>
+
+        <div class="endpoint-row">
+            <h3>GET /health</h3>
+            <p>
+                Returns system status, model version, fairness audit result,
+                and available coverage tiers.
+            </p>
+        </div>
+
+        <div class="endpoint-row">
+            <h3>POST /score</h3>
+            <p>
+                Accepts REDUCED (application only) or FULL (with all aggregate
+                sections) payload. Returns calibrated probability of default,
+                APPROVE / REVIEW / DECLINE decision, top 5 SHAP explanations,
+                coverage tier, and fairness audit version.
+            </p>
+        </div>
+    </div>
+</section>
+{% endblock %}
