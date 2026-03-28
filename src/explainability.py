@@ -33,6 +33,84 @@ DEFAULT_REASON: str = (
     "Combined application and repayment profile increased model risk"
 )
 
+ADVERSE_ACTION_REASON_MAP: dict[str, dict[str, str]] = {
+    "EXT_SOURCE_1": {
+        "title": "External credit reference strength",
+        "detail": "One external credit reference score was weaker than the stronger-approval range used in comparable cases.",
+        "category": "external_sources",
+    },
+    "EXT_SOURCE_2": {
+        "title": "External credit reference strength",
+        "detail": "A key external credit reference score remained below the more favorable range seen in lower-risk applications.",
+        "category": "external_sources",
+    },
+    "EXT_SOURCE_3": {
+        "title": "External credit reference strength",
+        "detail": "An additional external credit reference score reduced confidence in repayment strength for this application.",
+        "category": "external_sources",
+    },
+    "AMT_CREDIT": {
+        "title": "Requested credit amount",
+        "detail": "The requested credit amount appeared high relative to the rest of the application profile.",
+        "category": "credit_amount",
+    },
+    "AMT_ANNUITY": {
+        "title": "Estimated payment burden",
+        "detail": "The projected annuity or repayment obligation appeared elevated for the modeled repayment profile.",
+        "category": "payment_burden",
+    },
+    "AMT_INCOME_TOTAL_CAPPED": {
+        "title": "Income capacity",
+        "detail": "Reported income provided less repayment capacity than the model typically sees in stronger outcomes.",
+        "category": "income_capacity",
+    },
+    "DAYS_EMPLOYED": {
+        "title": "Employment stability",
+        "detail": "Employment-tenure information was less favorable than the model typically sees in lower-risk accounts.",
+        "category": "employment_stability",
+    },
+    "DAYS_BIRTH": {
+        "title": "Application profile maturity signal",
+        "detail": "An age-related application timing attribute contributed to the model output and should be reviewed carefully by an analyst.",
+        "category": "profile_maturity",
+    },
+    "BUREAU_": {
+        "title": "External credit obligations",
+        "detail": "Bureau-derived credit history signals indicated elevated outstanding obligation or repayment risk.",
+        "category": "bureau_history",
+    },
+    "INST_": {
+        "title": "Installment repayment history",
+        "detail": "Installment repayment patterns suggested past payment stress or inconsistent repayment behavior.",
+        "category": "installment_history",
+    },
+    "POS_": {
+        "title": "Point-of-sale repayment history",
+        "detail": "Past point-of-sale account behavior signaled weaker repayment performance than preferred.",
+        "category": "pos_history",
+    },
+    "CC_": {
+        "title": "Credit card utilization and delinquency",
+        "detail": "Credit card balance, utilization, or delinquency indicators suggested elevated revolving-credit risk.",
+        "category": "card_history",
+    },
+    "PREV_": {
+        "title": "Previous credit application performance",
+        "detail": "Prior application and approval history was less favorable than the model typically sees in stronger approvals.",
+        "category": "previous_history",
+    },
+    "CREDIT_INCOME_RATIO": {
+        "title": "Credit relative to income",
+        "detail": "The requested credit amount appeared large relative to stated income.",
+        "category": "credit_amount",
+    },
+    "ANNUITY_INCOME_RATIO": {
+        "title": "Repayment burden relative to income",
+        "detail": "Modeled repayment burden appeared high relative to stated income.",
+        "category": "payment_burden",
+    },
+}
+
 SHAP_PLOTS_DIR = os.environ.get("SHAP_PLOTS_DIR", "notebooks/shap_plots/")
 EVAL_PLOTS_DIR = os.environ.get("EVAL_PLOTS_DIR", "notebooks/eval_plots/")
 
@@ -60,6 +138,78 @@ def top_5_explanations_from_shap(
         {"feature": feat, "reason": render_reason(feat)}
         for feat in top.index
     ]
+
+
+def adverse_action_reason_for_feature(feature_name: str) -> dict[str, str]:
+    """Return analyst/compliance-friendly text for a feature name."""
+    feature_name = str(feature_name or "")
+    if feature_name in ADVERSE_ACTION_REASON_MAP:
+        return dict(ADVERSE_ACTION_REASON_MAP[feature_name])
+    for key, mapping in ADVERSE_ACTION_REASON_MAP.items():
+        if feature_name.startswith(key):
+            return dict(mapping)
+    return {
+        "title": "Overall application risk profile",
+        "detail": "The combined application and repayment profile increased modeled risk and should be reviewed by an analyst.",
+        "category": "general_profile",
+    }
+
+
+def build_adverse_action_report(
+    explanations: list[dict[str, Any]],
+    decision: str | None,
+    *,
+    max_reasons: int = 5,
+) -> dict[str, Any]:
+    """Build a compliance-oriented summary layer from existing explainability output."""
+    normalized_decision = str(decision or "").upper()
+    emphasize_adverse = normalized_decision in {"REVIEW", "DECLINE"}
+    section_title = "Adverse Action Summary" if emphasize_adverse else "Primary Watch-Outs"
+    summary = (
+        "Model-driven factors that contributed to this outcome and should be reviewed before any final customer-facing communication."
+        if emphasize_adverse
+        else "Model-driven watch-outs worth monitoring even though the current outcome is not adverse."
+    )
+
+    reasons: list[dict[str, Any]] = []
+    seen_categories: set[str] = set()
+    for item in explanations:
+        feature_name = str(item.get("feature", "")).strip()
+        if not feature_name:
+            continue
+        mapping = adverse_action_reason_for_feature(feature_name)
+        category = mapping["category"]
+        if category in seen_categories:
+            continue
+        seen_categories.add(category)
+        reasons.append(
+            {
+                "feature": feature_name,
+                "title": mapping["title"],
+                "detail": mapping["detail"],
+                "driver_reason": str(item.get("reason", "")).strip(),
+            }
+        )
+        if len(reasons) >= max_reasons:
+            break
+
+    reasons = reasons[:max_reasons]
+    if not reasons:
+        reasons = [
+            {
+                "feature": "",
+                "title": "Explainability artifacts unavailable",
+                "detail": "Detailed model-driver data is not available for this score run, so an analyst should rely on the stored score output and raw explainability payload.",
+                "driver_reason": "",
+            }
+        ]
+
+    return {
+        "section_title": section_title,
+        "summary": summary,
+        "reasons": reasons,
+        "emphasize_adverse": emphasize_adverse,
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────

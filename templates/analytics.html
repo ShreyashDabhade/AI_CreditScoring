@@ -34,9 +34,14 @@
                     Fairness Audit
                 </button>
             </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="drift-tab" data-bs-toggle="tab" data-bs-target="#drift-tab-pane" type="button" role="tab" aria-controls="drift-tab-pane" aria-selected="false">
+                    Drift
+                </button>
+            </li>
         </ul>
 
-        <div class="tab-content bg-white text-dark rounded-bottom p-4" id="analytics-tab-content">
+        <div class="tab-content analytics-surface rounded-bottom p-4" id="analytics-tab-content">
             <div class="tab-pane fade show active" id="eda-tab-pane" role="tabpanel" aria-labelledby="eda-tab" tabindex="0">
                 <div id="eda-content">
                     <div class="d-flex justify-content-center py-5">
@@ -65,6 +70,14 @@
                 <div id="fairness-content">
                     <div class="d-flex justify-content-center py-5">
                         <div class="spinner-border" role="status" aria-label="Loading fairness content"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="drift-tab-pane" role="tabpanel" aria-labelledby="drift-tab" tabindex="0">
+                <div id="drift-content">
+                    <div class="d-flex justify-content-center py-5">
+                        <div class="spinner-border" role="status" aria-label="Loading drift content"></div>
                     </div>
                 </div>
             </div>

@@ -73,9 +73,55 @@ p {
     margin: 0;
 }
 
+img,
+svg {
+    max-width: 100%;
+}
+
 pre {
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.page-header h1,
+.hero-copy h1,
+.utility-title,
+.section-intro h2,
+.two-column-copy h2,
+.centered-band h2,
+.about-block h2,
+.feature-block h3,
+.analyst-panel-header h2,
+.analyst-detail-topline h3,
+.report-panel-header h2,
+.report-driver-card h3,
+.report-summary-card h3,
+.report-adverse-copy h3,
+.page-intro,
+.hero-copy p:not(.eyebrow),
+.feature-block p,
+.two-column-copy p,
+.centered-band p,
+.about-block p,
+.sidebar-link-title,
+.sidebar-link-meta,
+.helper-chip,
+.utility-value,
+.metadata-value,
+.status-value,
+.report-meta-value,
+.report-key-value-item strong,
+.report-key-value-row strong,
+.report-sim-metric strong,
+.report-copilot-bubble,
+.analyst-kpi-value,
+.analyst-kpi-meta,
+.analyst-detail-item strong,
+.analyst-probability,
+.field-hint,
+.hint-line,
+.monospace {
+    overflow-wrap: anywhere;
 }
 
 .app-shell {
@@ -236,6 +282,8 @@ pre {
     z-index: 50;
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
     gap: 18px;
     padding: 22px 24px 18px;
     border-bottom: 1px solid var(--line-light);
@@ -245,6 +293,8 @@ pre {
 
 .utility-headline {
     min-width: 0;
+    flex: 1 1 280px;
+    max-width: 680px;
 }
 
 .utility-eyebrow {
@@ -258,9 +308,11 @@ pre {
 
 .utility-metrics {
     display: grid;
-    grid-template-columns: repeat(3, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 14px;
-    min-width: min(100%, 720px);
+    flex: 1 1 560px;
+    width: min(100%, 720px);
+    min-width: min(100%, 560px);
 }
 
 .utility-card {
@@ -274,6 +326,32 @@ pre {
     border-radius: var(--radius-card);
     background: var(--bg-panel);
     box-shadow: var(--shadow-soft);
+}
+
+.hero-copy,
+.hero-void,
+.feature-block,
+.two-column-copy > article,
+.centered-band,
+.about-block,
+.form-panel,
+.status-panel,
+.utility-card,
+.analyst-kpi-card,
+.analyst-detail-card,
+.analyst-empty-state,
+.report-hero-card,
+.report-panel,
+.report-meta-card,
+.report-summary-card,
+.report-simulator-field,
+.report-sim-metric,
+.report-sim-change-card,
+.report-copilot-bubble,
+.card,
+.card-body,
+.alert {
+    min-width: 0;
 }
 
 .utility-label {
@@ -301,6 +379,8 @@ pre {
     font-size: 13px;
     font-weight: 700;
     letter-spacing: 0.04em;
+    white-space: normal;
+    text-align: center;
 }
 
 .decision-badge.approve,
@@ -712,6 +792,8 @@ pre {
 .status-row {
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
     gap: 24px;
     padding: 16px 0;
     border-bottom: 1px solid rgba(17, 49, 77, 0.1);
@@ -731,6 +813,34 @@ pre {
     text-align: right;
     font-size: 16px;
     font-weight: 600;
+}
+
+.status-copy {
+    margin: 18px 0 0;
+    color: var(--text-soft-dark);
+    line-height: 1.6;
+}
+
+.status-chip-row {
+    margin-bottom: 18px;
+}
+
+.status-chip-row .ui-chip {
+    border-color: rgba(17, 49, 77, 0.08);
+    background: var(--bg-surface-strong);
+    color: var(--text-dark);
+}
+
+.status-chip-row .ui-chip.info {
+    border-color: rgba(0, 174, 239, 0.18);
+    background: rgba(0, 174, 239, 0.08);
+    color: var(--text-dark);
+}
+
+.status-chip-row .ui-chip.success,
+.status-chip-row .ui-chip.warning,
+.status-chip-row .ui-chip.danger {
+    color: var(--text-dark);
 }
 
 .monospace {
@@ -837,6 +947,7 @@ pre {
 
 .table-responsive {
     border-radius: 10px;
+    overflow-x: auto;
 }
 
 .table {
@@ -845,6 +956,141 @@ pre {
 
 .table > :not(caption) > * > * {
     padding: 0.9rem 0.85rem;
+}
+
+#analytics-tabs {
+    gap: 8px;
+    border-bottom: 0;
+}
+
+#analytics-tabs .nav-item {
+    margin-bottom: 0;
+}
+
+#analytics-tabs .nav-link {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: 0;
+    border-radius: 16px 16px 0 0;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-muted);
+    font-weight: 700;
+    transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease;
+}
+
+#analytics-tabs .nav-link:hover,
+#analytics-tabs .nav-link:focus-visible {
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+#analytics-tabs .nav-link.active {
+    border-color: rgba(214, 226, 236, 0.86);
+    background: var(--bg-surface-strong);
+    color: var(--text-dark);
+}
+
+.analytics-surface {
+    border: 1px solid rgba(214, 226, 236, 0.86);
+    background: linear-gradient(180deg, #ffffff, #f8fbfe);
+    color: var(--text-dark);
+    box-shadow: var(--shadow-soft);
+}
+
+.analytics-surface h3,
+.analytics-surface h4,
+.analytics-surface h5,
+.analytics-surface h6,
+.analytics-surface .card-title,
+.analytics-surface th,
+.analytics-surface td,
+.analytics-surface p,
+.analytics-surface li,
+.analytics-surface label {
+    color: inherit;
+}
+
+.analytics-surface .text-muted {
+    color: var(--text-soft-dark) !important;
+}
+
+.analytics-surface .card {
+    border: 1px solid var(--line-panel);
+    border-radius: 18px;
+    background: #ffffff;
+    color: var(--text-dark);
+    box-shadow: none;
+}
+
+.analytics-surface .card-img-top {
+    border-bottom: 1px solid rgba(17, 49, 77, 0.08);
+    background: #f4f8fc;
+}
+
+.analytics-surface .table {
+    color: var(--text-dark);
+}
+
+.analytics-surface .table thead th {
+    background: #eef5fb;
+    color: var(--text-soft-dark);
+}
+
+.analytics-surface .table-striped > tbody > tr:nth-of-type(odd) > * {
+    color: var(--text-dark);
+}
+
+.analytics-surface .alert-info {
+    border-color: #b4e6fb;
+    background: #e8f7ff;
+    color: #0e4768;
+}
+
+.analytics-surface .alert-secondary {
+    border-color: #d6e2ec;
+    background: #f4f8fc;
+    color: #34526c;
+}
+
+.analytics-surface .alert-warning {
+    border-color: #f0d998;
+    background: #fff5d6;
+    color: #6a5200;
+}
+
+.analytics-surface .alert-success {
+    border-color: #b9dfc9;
+    background: #e8f6ed;
+    color: #1f6b47;
+}
+
+.analytics-surface .alert-danger {
+    border-color: #f1c0c0;
+    background: #fdecec;
+    color: #7b2c2c;
+}
+
+.analytics-surface .badge.bg-success {
+    background: var(--approve) !important;
+    color: #ffffff !important;
+}
+
+.analytics-surface .badge.bg-danger {
+    background: var(--decline) !important;
+    color: #ffffff !important;
+}
+
+.analytics-surface .badge.bg-secondary {
+    background: #587289 !important;
+    color: #ffffff !important;
+}
+
+.analytics-surface .badge.bg-warning {
+    background: #f1cf6d !important;
+    color: var(--text-dark) !important;
+}
+
+.analytics-surface .spinner-border {
+    color: var(--accent);
 }
 
 .is-hidden {
@@ -1305,6 +1551,8 @@ pre {
     font-weight: 700;
     letter-spacing: 0.05em;
     text-transform: uppercase;
+    white-space: normal;
+    text-align: center;
 }
 
 .analyst-status-badge.approve {
@@ -1346,6 +1594,16 @@ pre {
     justify-content: space-between;
     gap: 16px;
     align-items: flex-start;
+}
+
+.analyst-panel-header > div,
+.analyst-detail-topline > div,
+.report-hero-headline > div,
+.report-panel-header > div,
+.report-driver-topline > div,
+.report-history-topline > div {
+    min-width: 0;
+    flex: 1 1 auto;
 }
 
 .analyst-detail-kicker {
@@ -1630,7 +1888,9 @@ pre {
 }
 
 .report-hero-outcome {
-    min-width: 220px;
+    min-width: 0;
+    flex: 0 1 220px;
+    max-width: 100%;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
@@ -1719,6 +1979,58 @@ pre {
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+    overflow-wrap: anywhere;
+}
+
+.ui-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ui-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: normal;
+    text-align: center;
+}
+
+.ui-chip.info {
+    border-color: rgba(0, 174, 239, 0.24);
+    background: rgba(0, 174, 239, 0.12);
+    color: #bde9ff;
+}
+
+.ui-chip.success {
+    border-color: rgba(85, 191, 131, 0.26);
+    background: rgba(85, 191, 131, 0.12);
+    color: #c7f4da;
+}
+
+.ui-chip.warning {
+    border-color: rgba(247, 237, 178, 0.22);
+    background: rgba(247, 237, 178, 0.08);
+    color: #f7edb2;
+}
+
+.ui-chip.danger {
+    border-color: rgba(196, 71, 71, 0.28);
+    background: rgba(196, 71, 71, 0.12);
+    color: #ffd8d8;
+}
+
+.ui-chip.neutral {
+    color: var(--text-muted);
 }
 
 .report-gauge-layout,
@@ -1867,6 +2179,68 @@ pre {
     color: var(--text-muted);
 }
 
+.report-adverse-panel.adverse-focus {
+    border: 1px solid rgba(214, 92, 92, 0.22);
+    background: linear-gradient(180deg, rgba(214, 92, 92, 0.08), rgba(255, 255, 255, 0.06));
+}
+
+.report-adverse-panel.watch-focus {
+    border: 1px solid rgba(255, 214, 92, 0.18);
+    background: linear-gradient(180deg, rgba(255, 214, 92, 0.06), rgba(255, 255, 255, 0.06));
+}
+
+.report-adverse-summary,
+.report-adverse-driver {
+    color: var(--text-muted);
+}
+
+.report-adverse-panel .ui-chip-row,
+.report-simulator-panel .ui-chip-row {
+    margin-top: 16px;
+}
+
+.report-adverse-list {
+    display: grid;
+    gap: 14px;
+}
+
+.report-adverse-card {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+    padding: 16px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.report-adverse-rank {
+    display: inline-flex;
+    width: 36px;
+    height: 36px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(0, 174, 239, 0.18);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.report-adverse-copy h3 {
+    font-family: "DM Sans", sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.report-adverse-copy p + p {
+    margin-top: 10px;
+}
+
+.report-adverse-driver {
+    font-size: 14px;
+}
+
 .report-driver-bar {
     margin-top: 14px;
     height: 8px;
@@ -1896,6 +2270,7 @@ pre {
 .report-key-value-row {
     display: flex;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 12px;
     align-items: flex-start;
 }
@@ -1970,8 +2345,22 @@ pre {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.report-simulator-field-topline,
+.report-simulator-input-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+}
+
 .report-simulator-label {
     font-size: 14px;
+    font-weight: 700;
+}
+
+.report-simulator-live-value {
+    color: var(--text-primary);
+    font-size: 16px;
     font-weight: 700;
 }
 
@@ -1980,6 +2369,36 @@ pre {
     font-size: 12px;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+}
+
+.report-simulator-field input[type="range"] {
+    width: 100%;
+    height: 6px;
+    padding: 0;
+    appearance: none;
+    border: 0;
+    border-radius: 999px;
+    background: linear-gradient(90deg, rgba(0, 174, 239, 0.88), rgba(255, 255, 255, 0.18));
+    cursor: pointer;
+}
+
+.report-simulator-field input[type="range"]::-webkit-slider-thumb {
+    width: 18px;
+    height: 18px;
+    appearance: none;
+    border-radius: 50%;
+    border: 2px solid #ffffff;
+    background: var(--accent);
+    box-shadow: 0 0 0 6px rgba(0, 174, 239, 0.16);
+}
+
+.report-simulator-field input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid #ffffff;
+    background: var(--accent);
+    box-shadow: 0 0 0 6px rgba(0, 174, 239, 0.16);
 }
 
 .report-simulator-field input {
@@ -1994,6 +2413,30 @@ pre {
     outline: none;
     border-color: rgba(0, 174, 239, 0.42);
     box-shadow: 0 0 0 4px rgba(0, 174, 239, 0.16);
+}
+
+.report-simulator-input-row input[type="number"] {
+    flex: 1 1 auto;
+}
+
+.report-simulator-precision {
+    color: var(--text-subtle);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.report-simulator-scale {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-subtle);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
 .report-simulator-actions,
@@ -2034,7 +2477,7 @@ pre {
 }
 
 .report-sim-metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .report-sim-metric span {
@@ -2067,6 +2510,28 @@ pre {
     color: #f7edb2;
 }
 
+.report-sim-metric.delta-up,
+.report-sim-metric.state-up {
+    border: 1px solid rgba(196, 71, 71, 0.28);
+    background: rgba(196, 71, 71, 0.12);
+}
+
+.report-sim-metric.delta-down,
+.report-sim-metric.state-down {
+    border: 1px solid rgba(85, 191, 131, 0.26);
+    background: rgba(85, 191, 131, 0.12);
+}
+
+.report-sim-metric.delta-flat,
+.report-sim-metric.state-flat {
+    border: 1px solid rgba(247, 237, 178, 0.22);
+    background: rgba(247, 237, 178, 0.08);
+}
+
+.report-sim-metric .decision-badge {
+    align-self: flex-start;
+}
+
 .report-sim-change-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -2086,6 +2551,257 @@ pre {
 .report-sim-change-arrow {
     color: var(--accent);
     font-weight: 700;
+}
+
+.report-copilot-panel {
+    border: 1px solid rgba(0, 174, 239, 0.2);
+    background: linear-gradient(180deg, rgba(8, 29, 46, 0.96), rgba(8, 22, 35, 0.98));
+}
+
+.report-copilot-toggle {
+    width: auto;
+    min-width: 88px;
+}
+
+.report-copilot-disclaimer {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.report-copilot-panel .ui-chip-row {
+    margin-top: 16px;
+}
+
+.report-copilot-statusline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    color: var(--text-subtle);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.report-copilot-statusline.is-gemini {
+    color: #8dd7ff;
+}
+
+.report-copilot-statusline.is-fallback {
+    color: #f7edb2;
+}
+
+.report-copilot-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: currentColor;
+    box-shadow: 0 0 12px currentColor;
+}
+
+.report-copilot-body {
+    display: grid;
+    gap: 16px;
+    margin-top: 18px;
+    max-height: 880px;
+    overflow: hidden;
+    opacity: 1;
+    transition: max-height 220ms ease, opacity 220ms ease, margin-top 220ms ease;
+}
+
+.report-copilot-panel.is-collapsed .report-copilot-body {
+    margin-top: 0;
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.report-copilot-prompts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.report-copilot-prompt {
+    padding: 10px 12px;
+    border: 1px solid rgba(0, 174, 239, 0.18);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: border-color 180ms ease, transform 180ms ease, background-color 180ms ease;
+}
+
+.report-copilot-prompt:hover:not(:disabled),
+.report-copilot-prompt:focus-visible {
+    border-color: rgba(0, 174, 239, 0.4);
+    background: rgba(0, 174, 239, 0.12);
+    transform: translateY(-1px);
+    outline: none;
+}
+
+.report-copilot-prompt:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.report-copilot-messages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 360px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.report-copilot-message {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.report-copilot-message-user {
+    flex-direction: row-reverse;
+}
+
+.report-copilot-avatar {
+    display: inline-flex;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}
+
+.report-copilot-message-bot .report-copilot-avatar {
+    background: linear-gradient(135deg, rgba(0, 174, 239, 0.24), rgba(127, 119, 221, 0.22));
+    color: #cfefff;
+}
+
+.report-copilot-bubble {
+    padding: 12px 14px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    line-height: 1.6;
+}
+
+.report-copilot-message-user .report-copilot-bubble {
+    background: rgba(0, 174, 239, 0.14);
+    border: 1px solid rgba(0, 174, 239, 0.2);
+}
+
+.report-copilot-bubble p {
+    margin: 0 0 8px;
+}
+
+.report-copilot-bubble p:last-child {
+    margin-bottom: 0;
+}
+
+.report-copilot-bubble code {
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: rgba(0, 174, 239, 0.12);
+}
+
+.report-copilot-typing {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.report-copilot-typing-dots {
+    display: inline-flex;
+    gap: 6px;
+    padding: 10px 14px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.report-copilot-typing-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(0, 174, 239, 0.6);
+    animation: chatDotBounce 1.4s infinite ease-in-out;
+}
+
+.report-copilot-typing-dots span:nth-child(2) {
+    animation-delay: 0.16s;
+}
+
+.report-copilot-typing-dots span:nth-child(3) {
+    animation-delay: 0.32s;
+}
+
+.report-copilot-error {
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: rgba(196, 71, 71, 0.14);
+    color: #ffd8d8;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.report-copilot-form {
+    margin: 0;
+}
+
+.report-copilot-input-wrap {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 6px 6px 6px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.report-copilot-input-wrap:focus-within {
+    border-color: rgba(0, 174, 239, 0.36);
+    box-shadow: 0 0 0 4px rgba(0, 174, 239, 0.14);
+}
+
+.report-copilot-input {
+    flex: 1 1 auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+}
+
+.report-copilot-input:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+.report-copilot-send {
+    width: auto;
+    min-width: 72px;
+    padding: 10px 14px;
+    border: 0;
+    border-radius: 12px;
+    background: linear-gradient(135deg, rgba(0, 174, 239, 0.32), rgba(127, 119, 221, 0.28));
+    color: var(--text-primary);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.report-copilot-send:disabled {
+    opacity: 0.65;
+    cursor: wait;
 }
 
 @keyframes reportSpin {
@@ -2158,7 +2874,12 @@ pre {
     }
 
     .utility-metrics {
+        width: 100%;
         min-width: 0;
+    }
+
+    .utility-headline {
+        max-width: none;
     }
 
     .analyst-kpi-grid {
@@ -2235,6 +2956,8 @@ pre {
     .report-driver-topline,
     .report-history-topline,
     .report-raw-output summary,
+    .report-simulator-field-topline,
+    .report-simulator-input-row,
     .report-key-value-row,
     .report-simulator-actions,
     .report-simulator-feedback,
@@ -2301,6 +3024,10 @@ pre {
     .button-row,
     .tier-selector {
         width: 100%;
+    }
+
+    .utility-metrics {
+        grid-template-columns: 1fr;
     }
 
     .portal-inline-control {

@@ -151,6 +151,48 @@
                     </article>
                 </div>
 
+                <article class="report-panel report-adverse-panel {% if report.adverse_action.emphasize_adverse %}adverse-focus{% else %}watch-focus{% endif %}">
+                    <div class="report-panel-header">
+                        <div>
+                            <p class="eyebrow">{% if report.adverse_action.emphasize_adverse %}Analyst Review{% else %}Monitoring Lens{% endif %}</p>
+                            <h2>{{ report.adverse_action.section_title }}</h2>
+                        </div>
+                        <span class="report-panel-kicker">Model-driven for analyst review</span>
+                    </div>
+
+                    <p class="report-adverse-summary">{{ report.adverse_action.summary }}</p>
+
+                    <div class="ui-chip-row">
+                        <span class="ui-chip {{ 'danger' if report.adverse_action.emphasize_adverse else 'warning' }}">
+                            {{ report.decision_label }}
+                        </span>
+                        <span class="ui-chip neutral">{{ report.coverage_tier }}</span>
+                        <span class="ui-chip info">{{ report.adverse_action.reasons | length }} reason{{ "" if report.adverse_action.reasons|length == 1 else "s" }}</span>
+                    </div>
+
+                    {% if report.adverse_action.reasons %}
+                    <div class="report-adverse-list">
+                        {% for reason in report.adverse_action.reasons %}
+                        <article class="report-adverse-card">
+                            <span class="report-adverse-rank">{{ loop.index }}</span>
+                            <div class="report-adverse-copy">
+                                <h3>{{ reason.title }}</h3>
+                                <p>{{ reason.detail }}</p>
+                                {% if reason.driver_reason %}
+                                <p class="report-adverse-driver">Linked model driver: {{ reason.driver_reason }}</p>
+                                {% endif %}
+                            </div>
+                        </article>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="report-empty-state compact">
+                        <h3>No structured reasons stored</h3>
+                        <p>This report still shows the raw SHAP narratives and top drivers, but no compliance-style reason summary was generated for this run.</p>
+                    </div>
+                    {% endif %}
+                </article>
+
                 <article class="report-panel">
                     <div class="report-panel-header">
                         <div>
@@ -221,27 +263,62 @@
 
                     <p class="report-simulator-intro">Adjust a curated set of high-impact fields and run the same credit model against a temporary clone of this saved payload. No changes are written back unless the analyst later saves through the edit workflow.</p>
 
+                    <div class="ui-chip-row">
+                        <span class="ui-chip info">Saved payload clone</span>
+                        <span class="ui-chip neutral">Current decision: {{ report.decision_label }}</span>
+                        <span class="ui-chip warning">Non-persistent</span>
+                    </div>
+
+                    {% if report.simulator_fields %}
                     <div class="report-simulator-grid">
                         {% for field in report.simulator_fields %}
                         <label class="report-simulator-field">
-                            <span class="report-simulator-label">{{ field.label }}</span>
-                            <span class="report-simulator-current">Current: {{ field.value_display }}</span>
+                            <span class="report-simulator-field-topline">
+                                <span class="report-simulator-label">{{ field.label }}</span>
+                                <strong class="report-simulator-live-value" id="{{ field.input_id }}-live">{{ field.value_display }}</strong>
+                            </span>
+                            <span class="report-simulator-current">Original: {{ field.value_display }}</span>
+                            {% if field.slider_enabled %}
                             <input
-                                type="number"
-                                id="{{ field.input_id }}"
-                                name="{{ field.name }}"
+                                type="range"
+                                id="{{ field.input_id }}-range"
                                 value="{{ field.value }}"
                                 step="{{ field.step }}"
-                                {% if field.min is defined %}min="{{ field.min }}"{% endif %}
-                                {% if field.max is defined %}max="{{ field.max }}"{% endif %}
-                                data-sim-field
+                                min="{{ field.min }}"
+                                max="{{ field.max }}"
+                                data-sim-range
+                                data-target-input="{{ field.input_id }}"
+                                data-display-target="{{ field.input_id }}-live"
                             >
+                            <div class="report-simulator-scale">
+                                <span>{{ field.min_display }}</span>
+                                <span>{{ field.max_display }}</span>
+                            </div>
+                            {% endif %}
+                            <div class="report-simulator-input-row">
+                                <input
+                                    type="number"
+                                    id="{{ field.input_id }}"
+                                    name="{{ field.name }}"
+                                    value="{{ field.value }}"
+                                    step="{{ field.step }}"
+                                    {% if field.min is defined %}min="{{ field.min }}"{% endif %}
+                                    {% if field.max is defined %}max="{{ field.max }}"{% endif %}
+                                    data-sim-field
+                                    data-display-target="{{ field.input_id }}-live"
+                                    data-decimals="{{ field.decimals if field.decimals is defined else '' }}"
+                                    data-value-kind="{{ field.value_kind if field.value_kind is defined else '' }}"
+                                >
+                                {% if field.slider_enabled %}
+                                <span class="report-simulator-precision">Precision edit</span>
+                                {% endif %}
+                            </div>
                         </label>
                         {% endfor %}
                     </div>
 
                     <div class="report-simulator-actions">
-                        <button type="button" class="button button-primary" id="simulate-run-button">Simulate Scenario</button>
+                        <button type="button" class="button button-primary" id="simulate-run-button">Run Simulation</button>
                         <button type="button" class="button button-ghost" id="simulate-reset-button">Reset Inputs</button>
                         <span class="report-simulator-note">Simulation only. The application record and score history remain unchanged.</span>
                     </div>
@@ -266,8 +343,13 @@
                                 <p id="sim-decision">Pending</p>
                             </article>
                             <article class="report-sim-metric" id="sim-delta-card">
-                                <span>Delta</span>
+                                <span>Probability delta</span>
                                 <strong id="sim-delta">-</strong>
+                                <p id="sim-risk-movement">Risk movement pending</p>
+                            </article>
+                            <article class="report-sim-metric" id="sim-decision-card">
+                                <span>Decision delta</span>
+                                <div class="decision-badge review" id="sim-decision-delta-badge">Pending</div>
                                 <p id="sim-change-count">0 changes</p>
                             </article>
                         </div>
@@ -282,6 +364,12 @@
                             <div class="report-sim-change-list" id="sim-change-list"></div>
                         </div>
                     </div>
+                    {% else %}
+                    <div class="report-empty-state compact">
+                        <h3>Simulator unavailable for this payload</h3>
+                        <p>No simulator-ready fields were found on the saved application, so scenario testing is not available for this report.</p>
+                    </div>
+                    {% endif %}
                 </article>
 
                 <article class="report-panel">
@@ -385,6 +473,81 @@
                     </div>
                     {% endif %}
                 </article>
+
+                <article class="report-panel report-copilot-panel" id="report-copilot-root">
+                    <div class="report-panel-header">
+                        <div>
+                            <p class="eyebrow">Analyst Copilot</p>
+                            <h2>Grounded report assistant</h2>
+                        </div>
+                        <button
+                            type="button"
+                            class="button button-ghost report-copilot-toggle"
+                            id="report-copilot-toggle"
+                            aria-expanded="true"
+                            aria-controls="report-copilot-body"
+                        >
+                            Hide
+                        </button>
+                    </div>
+
+                    <p class="report-copilot-disclaimer">
+                        Analyst assistant only. Responses are grounded to this application report and are not an automated decision engine.
+                    </p>
+
+                    <div class="ui-chip-row">
+                        <span class="ui-chip info">Grounded to this report</span>
+                        <span class="ui-chip neutral">Top drivers + SHAP narratives</span>
+                        <span class="ui-chip warning">Simulator-aware when active</span>
+                    </div>
+
+                    <div class="report-copilot-statusline" id="report-copilot-status">
+                        <span class="report-copilot-status-dot"></span>
+                        Checking copilot availability...
+                    </div>
+
+                    <div class="report-copilot-body" id="report-copilot-body">
+                        <div class="report-copilot-prompts">
+                            <button type="button" class="report-copilot-prompt" data-copilot-prompt>Summarize the risk profile</button>
+                            <button type="button" class="report-copilot-prompt" data-copilot-prompt>Explain the main decline reasons in simple language</button>
+                            <button type="button" class="report-copilot-prompt" data-copilot-prompt>What changes reduced risk in the simulator?</button>
+                            <button type="button" class="report-copilot-prompt" data-copilot-prompt>What should an analyst review before approval?</button>
+                        </div>
+
+                        <div class="report-copilot-messages" id="report-copilot-messages">
+                            <div class="report-copilot-message report-copilot-message-bot">
+                                <div class="report-copilot-avatar">AI</div>
+                                <div class="report-copilot-bubble">
+                                    <p>I’m grounded on this application report only.</p>
+                                    <p>Ask for a risk summary, adverse-action style explanation, analyst review checklist, or simulator comparison.</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="report-copilot-typing is-hidden" id="report-copilot-typing">
+                            <div class="report-copilot-avatar">AI</div>
+                            <div class="report-copilot-typing-dots">
+                                <span></span><span></span><span></span>
+                            </div>
+                        </div>
+
+                        <div class="report-copilot-error is-hidden" id="report-copilot-error"></div>
+
+                        <form class="report-copilot-form" id="report-copilot-form">
+                            <div class="report-copilot-input-wrap">
+                                <input
+                                    type="text"
+                                    id="report-copilot-input"
+                                    class="report-copilot-input"
+                                    placeholder="Ask about this application report..."
+                                    autocomplete="off"
+                                    maxlength="500"
+                                >
+                                <button type="submit" class="report-copilot-send" id="report-copilot-send">Send</button>
+                            </div>
+                        </form>
+                    </div>
+                </article>
             </aside>
         </div>
     </div>
@@ -393,11 +556,17 @@
 
 {% block scripts %}
 <script>
+    window.__REPORT_CHAT_CONTEXT__ = {{ report_chat_context | tojson }};
     window.__REPORT_SIMULATOR__ = {
         endpoint: {{ url_for('analyst_application_simulate', application_id=application.id) | tojson }},
         originalProbabilityText: {{ report.probability_text | tojson }},
         originalDecisionLabel: {{ report.decision_label | tojson }}
     };
+    window.__REPORT_COPILOT__ = {
+        endpoint: {{ url_for('api_chat') | tojson }},
+        healthEndpoint: {{ url_for('api_chat_health') | tojson }}
+    };
 </script>
 <script src="{{ url_for('ui_static', filename='analyst_report.js') }}"></script>
+<script src="{{ url_for('ui_static', filename='report_copilot.js') }}"></script>
 {% endblock %}

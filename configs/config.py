@@ -39,6 +39,13 @@ MODEL_VERSIONS: dict = {
     "reduced": "reduced_v2.1.0",
 }
 
+# Drift Monitoring
+DRIFT_BASELINE_PD_MEAN: float = 0.21
+DRIFT_LOOKBACK_WINDOW: int = 100
+DRIFT_WATCH_THRESHOLD: float = 0.05
+DRIFT_ALERT_THRESHOLD: float = 0.10
+DRIFT_MIN_SAMPLE_SIZE: int = 30
+
 # â”€â”€â”€ API Section Requirements â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 FULL_REQUIRED_SECTIONS: set[str] = {
     "application", "bureau_agg", "previous_agg",
@@ -56,4 +63,3 @@ if __name__ == "__main__":
     assert cfg.FAIRNESS_AUDIT_VERSION == "proxy_audit_2026Q1_v1.1"
     assert "full" in cfg.MODEL_VERSIONS
     print("configs/config.py verified âœ“")
-

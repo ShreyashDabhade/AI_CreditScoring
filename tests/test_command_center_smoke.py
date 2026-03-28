@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from src.api.app import _build_demo_seed_payload
-from src.db_manager import get_application_by_id, init_database
+from src.db_manager import create_application, get_application_by_id, init_database
 
 
 def _load_ui_app(tmp_path: Path):
@@ -65,14 +65,26 @@ def test_application_lifecycle_smoke(tmp_path: Path):
 
 
 def test_existing_routes_and_score_smoke(tmp_path: Path):
-    app, _ = _load_ui_app(tmp_path)
+    app, db_path = _load_ui_app(tmp_path)
     client = app.test_client()
     payload = {"application": _build_demo_seed_payload()["application"]}
+    application = create_application(
+        db_path,
+        applicant_name="Smoke Analyst",
+        tier_type="REDUCED",
+        current_status="READY_FOR_REVIEW",
+        application_payload_json=payload,
+    )
 
     assert client.get("/").status_code == 200
     assert client.get("/analyze").status_code == 200
+    assert client.get("/applications/new").status_code == 200
+    assert client.get("/analyst").status_code == 200
+    assert client.get("/analyst/applications").status_code == 200
+    assert client.get(f"/analyst/applications/{application['id']}").status_code == 200
     assert client.get("/status").status_code == 200
     assert client.get("/analytics").status_code == 200
+    assert client.get("/api/chat/health").status_code == 200
 
     health_response = client.get("/health")
     assert health_response.status_code == 200
@@ -82,3 +94,10 @@ def test_existing_routes_and_score_smoke(tmp_path: Path):
     assert score_response.status_code == 200
     score_json = score_response.get_json()
     assert score_json["decision"] in {"APPROVE", "REVIEW", "DECLINE"}
+
+    analyze_response = client.post(
+        f"/analyst/applications/{application['id']}/analyze",
+        follow_redirects=False,
+    )
+    assert analyze_response.status_code == 302
+    assert client.get(f"/analyst/applications/{application['id']}/report").status_code == 200

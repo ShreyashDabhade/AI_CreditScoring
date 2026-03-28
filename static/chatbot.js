@@ -24,6 +24,13 @@
     var isOpen = false;
     var isSending = false;
 
+    function _getReportContext() {
+        if (window.__REPORT_CHAT_CONTEXT__ && typeof window.__REPORT_CHAT_CONTEXT__ === 'object') {
+            return window.__REPORT_CHAT_CONTEXT__;
+        }
+        return null;
+    }
+
     // ── Auto-detect score context from the current page ─────────
     function _getPageContext() {
         var ctx = {
@@ -38,10 +45,27 @@
             ctx.fairness_audit_passed = health.fairness_audit_passed;
         }
 
+        var reportContext = _getReportContext();
+        if (reportContext) {
+            ctx.report_scope = reportContext.scope || 'analyst_application_report';
+            ctx.application_id = reportContext.application_id || null;
+            ctx.has_simulator_scenario = !!reportContext.simulator_result;
+        }
+
         return ctx;
     }
 
     function _getScoreData() {
+        var reportContext = _getReportContext();
+        if (reportContext && reportContext.latest_assessment) {
+            var latest = reportContext.latest_assessment;
+            return {
+                probability_of_default: latest.calibrated_probability_text || latest.calibrated_probability || null,
+                decision: latest.decision_label || latest.decision || null,
+                model_version: latest.model_version || null,
+            };
+        }
+
         // Method 1: Look for report data in the simulator config
         var simConfig = window.__REPORT_SIMULATOR__;
         if (simConfig) {
@@ -77,6 +101,16 @@
     }
 
     function _getShapValues() {
+        var reportContext = _getReportContext();
+        if (reportContext && Array.isArray(reportContext.top_drivers) && reportContext.top_drivers.length > 0) {
+            return reportContext.top_drivers.map(function (item) {
+                return {
+                    feature: item.feature || 'Unknown',
+                    reason: item.reason || ''
+                };
+            });
+        }
+
         var shapEls = document.querySelectorAll('.report-driver-card');
         if (shapEls.length === 0) return null;
 
@@ -180,6 +214,7 @@
                         score_data: _getScoreData(),
                         shap_values: _getShapValues(),
                         page_context: _getPageContext(),
+                        report_context: _getReportContext(),
                     },
                     history: conversationHistory.slice(-8),
                 }),

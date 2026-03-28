@@ -83,6 +83,8 @@ Here is the full sitemap you must reference when guiding users:
 6. Keep responses concise (3-5 paragraphs max) but thorough.
 7. If the user asks something completely unrelated to credit/finance/the platform, politely redirect.
 8. NEVER make up scores or probabilities. Only cite data explicitly provided.
+9. When structured REPORT CONTEXT is provided, stay grounded in that context and say when a requested detail is unavailable.
+10. Treat simulator results as temporary analyst scenarios only, never as persisted decisions.
 """
 
 # ──────────────────────────────────────────────────────────────────────
@@ -133,6 +135,7 @@ def _build_context_block(
     score_data: dict[str, Any] | None,
     shap_values: list[dict[str, Any]] | None,
     page_context: dict[str, Any] | None,
+    report_context: dict[str, Any] | None = None,
 ) -> str:
     """Build context to prepend to user's message so Gemini knows what the user is looking at."""
     parts: list[str] = []
@@ -156,6 +159,72 @@ def _build_context_block(
             feat = item.get("feature", item.get("name", "Unknown"))
             reason = item.get("reason", item.get("description", ""))
             parts.append(f"{i}. **{feat}**: {reason}")
+
+    if report_context and isinstance(report_context, dict):
+        applicant_summary = report_context.get("applicant_summary", {})
+        latest_assessment = report_context.get("latest_assessment", {})
+        adverse_action = report_context.get("adverse_action", {})
+        score_history = report_context.get("score_history", [])
+        simulator_result = report_context.get("simulator_result")
+
+        parts.append("\n## Structured Report Context")
+        if applicant_summary:
+            parts.append(
+                "- Applicant: {name} | Tier: {tier} | Status: {status}".format(
+                    name=applicant_summary.get("applicant_name", "-"),
+                    tier=applicant_summary.get("coverage_tier", "-"),
+                    status=applicant_summary.get("current_status", "-"),
+                )
+            )
+        if latest_assessment:
+            parts.append(
+                "- Latest assessment: {decision} at {probability}".format(
+                    decision=latest_assessment.get("decision_label", latest_assessment.get("decision", "-")),
+                    probability=latest_assessment.get("calibrated_probability_text", "-"),
+                )
+            )
+            summary = str(latest_assessment.get("decision_summary", "")).strip()
+            if summary:
+                parts.append(f"- Decision summary: {summary}")
+        narratives = report_context.get("shap_narratives", [])
+        if narratives:
+            parts.append("- SHAP narratives:")
+            for narrative in narratives[:5]:
+                parts.append(f"  • {narrative}")
+        drivers = report_context.get("top_drivers", [])
+        if drivers:
+            parts.append("- Top drivers:")
+            for item in drivers[:5]:
+                parts.append(f"  • {item.get('feature', 'Unknown')}: {item.get('reason', '')}")
+        reasons = adverse_action.get("reasons", []) if isinstance(adverse_action, dict) else []
+        if reasons:
+            parts.append(f"- {adverse_action.get('section_title', 'Analyst review')} reasons:")
+            for item in reasons[:5]:
+                parts.append(f"  • {item.get('title', 'Reason')}: {item.get('detail', '')}")
+        if score_history:
+            parts.append("- Recent score history:")
+            for item in score_history[:5]:
+                parts.append(
+                    "  • {date}: {decision} at {probability}".format(
+                        date=item.get("scored_at", "-"),
+                        decision=item.get("decision_label", item.get("decision", "-")),
+                        probability=item.get("probability_text", "-"),
+                    )
+                )
+        if simulator_result and isinstance(simulator_result, dict):
+            parts.append("- Active simulator scenario:")
+            parts.append(
+                "  • Simulated outcome: {decision} at {probability} ({delta})".format(
+                    decision=simulator_result.get("simulated_decision_label", "-"),
+                    probability=simulator_result.get("simulated_probability_text", "-"),
+                    delta=simulator_result.get("delta_text", "no delta"),
+                )
+            )
+            for item in simulator_result.get("changed_features", [])[:5]:
+                parts.append(
+                    f"  • {item.get('label', 'Field')}: {item.get('before', '-')}"
+                    f" -> {item.get('after', '-')}"
+                )
 
     if not parts:
         return ""
@@ -190,6 +259,136 @@ def _extract_pasted_data(message: str) -> dict[str, Any] | None:
     return None
 
 
+def _report_latest_assessment(report_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(report_context, dict):
+        return {}
+    latest = report_context.get("latest_assessment")
+    return latest if isinstance(latest, dict) else {}
+
+
+def _report_driver_lines(report_context: dict[str, Any] | None) -> list[str]:
+    if not isinstance(report_context, dict):
+        return []
+    drivers = report_context.get("top_drivers")
+    if not isinstance(drivers, list):
+        return []
+    return [
+        f"{index}. {item.get('feature', 'Unknown')} — {item.get('reason', '')}".strip()
+        for index, item in enumerate(drivers[:5], 1)
+        if isinstance(item, dict)
+    ]
+
+
+def _report_reason_items(report_context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(report_context, dict):
+        return []
+    adverse_action = report_context.get("adverse_action")
+    if not isinstance(adverse_action, dict):
+        return []
+    reasons = adverse_action.get("reasons")
+    return reasons if isinstance(reasons, list) else []
+
+
+def _report_simulator_result(report_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(report_context, dict):
+        return {}
+    simulator_result = report_context.get("simulator_result")
+    return simulator_result if isinstance(simulator_result, dict) else {}
+
+
+def _report_summary_fallback(report_context: dict[str, Any]) -> str:
+    applicant = report_context.get("applicant_summary", {}) if isinstance(report_context.get("applicant_summary"), dict) else {}
+    latest = _report_latest_assessment(report_context)
+    lines = [
+        "Here is the grounded risk profile for this application:",
+        "",
+        f"- Applicant: {applicant.get('applicant_name', '-')}",
+        f"- Current workflow status: {applicant.get('current_status', '-')}",
+        f"- Latest decision: {latest.get('decision_label', latest.get('decision', '-'))}",
+        f"- Calibrated probability of default: {latest.get('calibrated_probability_text', '-')}",
+    ]
+    summary = str(latest.get("decision_summary", "")).strip()
+    if summary:
+        lines.append(f"- Decision framing: {summary}")
+
+    drivers = _report_driver_lines(report_context)
+    if drivers:
+        lines.extend(["", "Main model drivers:"])
+        lines.extend(drivers[:3])
+
+    return "\n".join(lines)
+
+
+def _report_reason_fallback(report_context: dict[str, Any]) -> str:
+    adverse_action = report_context.get("adverse_action", {}) if isinstance(report_context.get("adverse_action"), dict) else {}
+    reasons = _report_reason_items(report_context)
+    section_title = adverse_action.get("section_title", "Analyst review reasons")
+    if not reasons:
+        drivers = _report_driver_lines(report_context)
+        if not drivers:
+            return "I don't have stored adverse-action style reasons for this report yet. I can still summarize the top drivers that were captured."
+        return "\n".join([f"{section_title}:", ""] + drivers[:3])
+
+    lines = [f"{section_title} in simple language:", ""]
+    for index, item in enumerate(reasons[:5], 1):
+        title = item.get("title", "Reason")
+        detail = item.get("detail", "")
+        lines.append(f"{index}. {title} — {detail}")
+    return "\n".join(lines)
+
+
+def _report_simulator_fallback(report_context: dict[str, Any]) -> str:
+    simulator_result = _report_simulator_result(report_context)
+    if not simulator_result:
+        return "There is no active simulator scenario in context yet. Run a What-If simulation on this report and I can compare the scenario against the persisted result."
+
+    lines = [
+        "Here is the current simulator readout:",
+        "",
+        f"- Original outcome: {simulator_result.get('original_decision_label', '-')} at {simulator_result.get('original_probability_text', '-')}",
+        f"- Simulated outcome: {simulator_result.get('simulated_decision_label', '-')} at {simulator_result.get('simulated_probability_text', '-')}",
+        f"- Probability delta: {simulator_result.get('delta_text', '-')}",
+        f"- Risk movement: {simulator_result.get('risk_movement_label', '-')}",
+    ]
+
+    changes = simulator_result.get("changed_features")
+    if isinstance(changes, list) and changes:
+        lines.extend(["", "Fields changed in the scenario:"])
+        for index, item in enumerate(changes[:5], 1):
+            lines.append(f"{index}. {item.get('label', 'Field')} — {item.get('before', '-')} -> {item.get('after', '-')}")
+
+    return "\n".join(lines)
+
+
+def _report_review_fallback(report_context: dict[str, Any]) -> str:
+    reasons = _report_reason_items(report_context)
+    history = report_context.get("score_history", []) if isinstance(report_context.get("score_history"), list) else []
+
+    lines = [
+        "Before moving toward approval, an analyst should review:",
+        "",
+    ]
+    if reasons:
+        for index, item in enumerate(reasons[:3], 1):
+            lines.append(f"{index}. {item.get('title', 'Reason')} — {item.get('detail', '')}")
+    else:
+        for index, item in enumerate(_report_driver_lines(report_context)[:3], 1):
+            lines.append(f"{index}. {item}")
+
+    if history:
+        latest_history = history[0]
+        lines.extend(
+            [
+                "",
+                f"Recent score history check: latest stored run was {latest_history.get('decision_label', latest_history.get('decision', '-'))} at {latest_history.get('probability_text', '-')}.",
+            ]
+        )
+
+    lines.append("")
+    lines.append("Use this as analyst support only, not as an automated approval instruction.")
+    return "\n".join(lines)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Smart fallback — NOT if-else, uses templates with real logic
 # ──────────────────────────────────────────────────────────────────────
@@ -198,6 +397,7 @@ def _smart_fallback(
     message: str,
     score_data: dict[str, Any] | None,
     shap_values: list[dict[str, Any]] | None,
+    report_context: dict[str, Any] | None = None,
 ) -> str:
     """Intelligent fallback when Gemini is unavailable. Still provides
     useful, contextual responses by combining templates with actual data."""
@@ -249,6 +449,16 @@ def _smart_fallback(
         "how do i": "What would you like to do? I can help you:\n• **Score an application** → `/analyze`\n• **View saved applications** → `/analyst`\n• **Check model health** → `/status`\n• **See EDA & charts** → `/analytics`\n\nJust tell me what you're trying to accomplish!",
         "help": "I'm your MasterMind Credit Advisor! I can help you:\n\n• **Navigate the platform** — Just ask \"where do I go to score an application?\"\n• **Interpret scores** — Paste your score JSON here and I'll explain it\n• **Understand risk factors** — I'll translate SHAP values into plain English\n• **Improve creditworthiness** — I'll give actionable advice based on your factors\n\n💡 **Tip:** When you're on a report page, I automatically see the score data and can answer questions about that specific application!",
     }
+
+    if report_context:
+        if ("risk profile" in lower) or ("summarize" in lower and "risk" in lower) or "summary" in lower:
+            return _report_summary_fallback(report_context)
+        if "decline reasons" in lower or "main decline reasons" in lower or ("simple language" in lower and "reason" in lower):
+            return _report_reason_fallback(report_context)
+        if "simulator" in lower or "reduced risk" in lower or "what changes" in lower:
+            return _report_simulator_fallback(report_context)
+        if "review before approval" in lower or "before approval" in lower or "analyst review" in lower:
+            return _report_review_fallback(report_context)
 
     for keyword, response in nav_keywords.items():
         if keyword in lower:
@@ -304,6 +514,7 @@ def chat(
     score_data: dict[str, Any] | None = None,
     shap_values: list[dict[str, Any]] | None = None,
     page_context: dict[str, Any] | None = None,
+    report_context: dict[str, Any] | None = None,
     conversation_history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Process a chat message. Returns {"response": str, "source": str, "gemini_available": bool}."""
@@ -318,7 +529,24 @@ def chat(
         score_data = pasted
         shap_values = pasted.get("top_5_explanations", shap_values)
 
-    context_block = _build_context_block(score_data, shap_values, page_context)
+    if report_context and not score_data:
+        latest = _report_latest_assessment(report_context)
+        score_data = {
+            "probability_of_default": latest.get("calibrated_probability_text"),
+            "decision": latest.get("decision_label", latest.get("decision")),
+            "model_version": latest.get("model_version"),
+        }
+    if report_context and not shap_values:
+        shap_values = [
+            {
+                "feature": item.get("feature"),
+                "reason": item.get("reason"),
+            }
+            for item in report_context.get("top_drivers", [])
+            if isinstance(item, dict)
+        ] or shap_values
+
+    context_block = _build_context_block(score_data, shap_values, page_context, report_context)
 
     # Try Gemini first
     if _init_gemini() and _gemini_model:
@@ -345,7 +573,7 @@ def chat(
             # Fall through to smart fallback
 
     return {
-        "response": _smart_fallback(message, score_data, shap_values),
+        "response": _smart_fallback(message, score_data, shap_values, report_context),
         "source": "fallback",
         "gemini_available": False,
     }

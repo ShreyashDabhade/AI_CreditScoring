@@ -11,7 +11,17 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 from jinja2 import ChoiceLoader, FileSystemLoader
 import pandas as pd
 
+from configs.config import (
+    DRIFT_ALERT_THRESHOLD,
+    DRIFT_BASELINE_PD_MEAN,
+    DRIFT_LOOKBACK_WINDOW,
+    DRIFT_MIN_SAMPLE_SIZE,
+    DRIFT_WATCH_THRESHOLD,
+)
 from src.chatbot import chat as chatbot_chat, is_gemini_available
+from src.explainability import build_adverse_action_report
+from src.fairness_comparison import build_fairness_comparison_snapshot
+from src.model_monitoring import compute_probability_drift_snapshot
 
 from src.api import determine_coverage_tier, score_request, validate_payload
 from src.api.app import RUNTIME_EXTENSION_KEY, _build_demo_config, _build_demo_seed_payload, create_app
@@ -39,27 +49,51 @@ ANALYTICS_DIRS = {
 }
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
+SIMULATOR_NEGLIGIBLE_DELTA = 0.0025
 WHAT_IF_FIELD_SPECS = (
     {
         "section": "application",
         "name": "AMT_CREDIT",
         "label": "Credit Amount",
         "step": "1000",
-        "min": "0",
+        "min": "50000",
+        "max": "1500000",
+        "control": "slider",
+        "value_kind": "amount",
+        "decimals": 0,
     },
     {
         "section": "application",
         "name": "AMT_ANNUITY",
         "label": "Annuity",
         "step": "500",
-        "min": "0",
+        "min": "5000",
+        "max": "100000",
+        "control": "slider",
+        "value_kind": "amount",
+        "decimals": 0,
     },
     {
         "section": "application",
         "name": "AMT_INCOME_TOTAL_CAPPED",
         "label": "Income Total",
-        "step": "1000",
+        "step": "5000",
+        "min": "25000",
+        "max": "500000",
+        "control": "slider",
+        "value_kind": "amount",
+        "decimals": 0,
+    },
+    {
+        "section": "application",
+        "name": "EXT_SOURCE_1",
+        "label": "External Source 1",
+        "step": "0.01",
         "min": "0",
+        "max": "1",
+        "control": "slider",
+        "value_kind": "ratio",
+        "decimals": 2,
     },
     {
         "section": "application",
@@ -68,6 +102,9 @@ WHAT_IF_FIELD_SPECS = (
         "step": "0.01",
         "min": "0",
         "max": "1",
+        "control": "slider",
+        "value_kind": "ratio",
+        "decimals": 2,
     },
     {
         "section": "application",
@@ -76,6 +113,9 @@ WHAT_IF_FIELD_SPECS = (
         "step": "0.01",
         "min": "0",
         "max": "1",
+        "control": "slider",
+        "value_kind": "ratio",
+        "decimals": 2,
     },
     {
         "section": "bureau_agg",
@@ -83,6 +123,7 @@ WHAT_IF_FIELD_SPECS = (
         "label": "Bureau Debt / Credit Ratio",
         "step": "0.01",
         "min": "0",
+        "control": "number",
     },
     {
         "section": "previous_agg",
@@ -91,6 +132,7 @@ WHAT_IF_FIELD_SPECS = (
         "step": "0.01",
         "min": "0",
         "max": "1",
+        "control": "number",
     },
     {
         "section": "installments_agg",
@@ -98,6 +140,7 @@ WHAT_IF_FIELD_SPECS = (
         "label": "Installment DPD Mean",
         "step": "1",
         "min": "0",
+        "control": "number",
     },
     {
         "section": "pos_cash_agg",
@@ -105,6 +148,7 @@ WHAT_IF_FIELD_SPECS = (
         "label": "POS Cash DPD Mean",
         "step": "0.5",
         "min": "0",
+        "control": "number",
     },
     {
         "section": "credit_card_agg",
@@ -112,6 +156,7 @@ WHAT_IF_FIELD_SPECS = (
         "label": "Credit Card Utilization Mean",
         "step": "0.01",
         "min": "0",
+        "control": "number",
     },
 )
 
@@ -194,6 +239,34 @@ def _build_health_snapshot(app: Flask) -> dict[str, Any]:
     }
 
 
+def _build_drift_snapshot(app: Flask) -> dict[str, Any]:
+    snapshot = compute_probability_drift_snapshot(
+        _application_db_path(app),
+        baseline_mean=DRIFT_BASELINE_PD_MEAN,
+        lookback=DRIFT_LOOKBACK_WINDOW,
+        watch_threshold=DRIFT_WATCH_THRESHOLD,
+        alert_threshold=DRIFT_ALERT_THRESHOLD,
+        min_sample_size=DRIFT_MIN_SAMPLE_SIZE,
+    )
+    return {
+        **snapshot,
+        "baseline_mean_text": _format_probability_pct(snapshot.get("baseline_mean")),
+        "live_mean_text": _format_probability_pct(snapshot.get("live_mean")),
+        "live_std_text": _format_probability_pct(snapshot.get("live_std")),
+        "deviation_pct_text": (
+            f"{snapshot['deviation_pct']:+.1f}%"
+            if isinstance(snapshot.get("deviation_pct"), (int, float))
+            else "—"
+        ),
+        "status_label": str(snapshot.get("status", "watch")).capitalize(),
+        "status_badge_class": {
+            "stable": "approve",
+            "watch": "review",
+            "alert": "decline",
+        }.get(str(snapshot.get("status", "watch")), "review"),
+    }
+
+
 def _build_ui_config(app: Flask) -> dict[str, Any]:
     config = dict(_build_demo_config(_runtime(app)))
     routes = dict(config.get("routes", {}))
@@ -250,12 +323,14 @@ def _plot_entries(section: str) -> list[dict[str, str]]:
     ]
 
 
-def _build_analytics_config() -> dict[str, Any]:
+def _build_analytics_config(app: Flask) -> dict[str, Any]:
     fairness_dir = ANALYTICS_DIRS["fairness"]
     return {
         "plots": {section: _plot_entries(section) for section in ANALYTICS_DIRS},
         "qualityReport": _load_optional_json(PROJECT_ROOT / "data" / "data_quality_report.json"),
         "championReport": _load_optional_text(_artifact_dir() / "champion_report.txt"),
+        "drift": _build_drift_snapshot(app),
+        "fairnessComparison": build_fairness_comparison_snapshot(_artifact_dir(), fairness_dir),
         "fairnessTables": {
             family: table
             for family in ("primary", "secondary", "tertiary")
@@ -264,13 +339,21 @@ def _build_analytics_config() -> dict[str, Any]:
     }
 
 
-def _render_ui_page(app: Flask, template_name: str, *, page_title: str, active_nav: str):
+def _render_ui_page(
+    app: Flask,
+    template_name: str,
+    *,
+    page_title: str,
+    active_nav: str,
+    **context: Any,
+):
     return render_template(
         template_name,
         page_title=page_title,
         active_nav=active_nav,
         ui_config=_build_ui_config(app),
         health_snapshot=_build_health_snapshot(app),
+        **context,
     )
 
 
@@ -608,6 +691,43 @@ def _format_scalar_snapshot(value: Any) -> str:
     return str(value)
 
 
+def _format_simulator_value(value: Any, field: dict[str, Any]) -> str:
+    if value is None or value == "":
+        return "-"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    kind = str(field.get("value_kind", "")).lower()
+    decimals = int(field.get("decimals", 0 if kind == "amount" else 2))
+    if kind == "amount":
+        return f"{numeric:,.0f}"
+    return f"{numeric:.{decimals}f}"
+
+
+def _simulation_delta_direction(delta: float | None) -> str:
+    if delta is None or abs(delta) <= SIMULATOR_NEGLIGIBLE_DELTA:
+        return "flat"
+    return "up" if delta > 0 else "down"
+
+
+def _simulation_movement_label(delta_direction: str) -> str:
+    return {
+        "down": "Risk decreased",
+        "flat": "Risk nearly unchanged",
+        "up": "Risk increased",
+    }.get(delta_direction, "Risk movement unavailable")
+
+
+def _decision_delta_label(original_decision: Any, simulated_decision: Any) -> str:
+    original_label = _decision_label(original_decision)
+    simulated_label = _decision_label(simulated_decision)
+    if original_label == simulated_label:
+        return f"{simulated_label} unchanged"
+    return f"{original_label} -> {simulated_label}"
+
+
 def _build_application_snapshot(payload: dict[str, Any]) -> list[dict[str, str]]:
     application = payload.get("application", {}) if isinstance(payload.get("application"), dict) else {}
     rows = [
@@ -754,6 +874,7 @@ def _build_report_context(
         "decision_label": _decision_label(decision),
         "decision_badge_class": _decision_badge_class(decision),
         "decision_summary": _decision_summary(decision),
+        "probability_value": float(probability) if isinstance(probability, (int, float)) else None,
         "probability_text": _format_probability_pct(probability),
         "gauge_value": gauge_value,
         "model_version": model_version,
@@ -767,11 +888,85 @@ def _build_report_context(
         "application_snapshot": _build_application_snapshot(payload),
         "external_sources": _build_external_source_snapshot(payload),
         "aggregate_snapshot": _build_aggregate_snapshot(payload, coverage_tier),
+        "adverse_action": build_adverse_action_report(explanations, decision),
         "last_model_result": last_model_result,
         "score_history": history_items,
         "score_history_count": len(history_items),
         "raw_output_pretty": latest_score_run.get("score_payload_pretty") if latest_score_run else "",
         "simulator_fields": _build_simulator_fields(payload, coverage_tier),
+    }
+
+
+def _build_report_chat_context(
+    application: dict[str, Any],
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    top_drivers = report.get("top_drivers") if isinstance(report.get("top_drivers"), list) else []
+    score_history = report.get("score_history") if isinstance(report.get("score_history"), list) else []
+    adverse_action = report.get("adverse_action") if isinstance(report.get("adverse_action"), dict) else {}
+    reasons = adverse_action.get("reasons") if isinstance(adverse_action.get("reasons"), list) else []
+
+    return {
+        "scope": "analyst_application_report",
+        "application_id": application.get("id"),
+        "applicant_summary": {
+            "applicant_name": application.get("applicant_name"),
+            "sk_id_curr": application.get("sk_id_curr"),
+            "coverage_tier": report.get("coverage_tier"),
+            "current_status": str(application.get("current_status") or "-").replace("_", " "),
+            "submitted_at": report.get("submission_display"),
+            "updated_at": report.get("updated_display"),
+        },
+        "latest_assessment": {
+            "decision": report.get("decision"),
+            "decision_label": report.get("decision_label"),
+            "calibrated_probability": report.get("probability_value"),
+            "calibrated_probability_text": report.get("probability_text"),
+            "decision_summary": report.get("decision_summary"),
+            "model_version": report.get("model_version"),
+            "fairness_audit_passed": report.get("fairness_audit_passed"),
+            "analyzed_at": report.get("analyzed_at_display"),
+        },
+        "top_drivers": [
+            {
+                "feature": item.get("feature_label"),
+                "reason": item.get("reason"),
+                "rank": item.get("rank"),
+            }
+            for item in top_drivers[:5]
+        ],
+        "shap_narratives": [
+            str(item).strip()
+            for item in report.get("shap_narratives", [])[:5]
+            if str(item).strip()
+        ],
+        "score_history": [
+            {
+                "scored_at": item.get("scored_at_display"),
+                "decision": item.get("decision"),
+                "decision_label": item.get("decision_label"),
+                "probability_text": item.get("probability_text"),
+                "model_version": item.get("model_version"),
+                "is_latest": bool(item.get("is_latest")),
+            }
+            for item in score_history[:5]
+        ],
+        "adverse_action": {
+            "section_title": adverse_action.get("section_title"),
+            "summary": adverse_action.get("summary"),
+            "reasons": [
+                {
+                    "title": reason.get("title"),
+                    "detail": reason.get("detail"),
+                    "driver_reason": reason.get("driver_reason"),
+                }
+                for reason in reasons[:5]
+            ],
+        },
+        "simulator_result": None,
+        "analyst_guidance": {
+            "disclaimer": "Analyst assistant only. Responses are grounded to this application report and are not automated lending decisions."
+        },
     }
 
 
@@ -789,7 +984,11 @@ def _build_simulator_fields(payload: dict[str, Any], tier_type: str) -> list[dic
         field = dict(spec)
         field["input_id"] = f"sim-{spec['section']}-{spec['name']}".replace("_", "-").lower()
         field["value"] = "" if value is None else value
-        field["value_display"] = _format_scalar_snapshot(value)
+        field["value_display"] = _format_simulator_value(value, field)
+        field["slider_enabled"] = field.get("control") == "slider"
+        if field["slider_enabled"]:
+            field["min_display"] = _format_simulator_value(field.get("min"), field)
+            field["max_display"] = _format_simulator_value(field.get("max"), field)
         fields.append(field)
     return fields
 
@@ -879,22 +1078,28 @@ def _simulate_saved_application(
     delta = None
     if isinstance(original_probability, (int, float)) and isinstance(simulated_probability, (int, float)):
         delta = float(simulated_probability) - float(original_probability)
+    delta_direction = _simulation_delta_direction(delta)
+    original_decision = application.get("last_decision")
+    simulated_decision = simulated_response.get("decision")
 
     return {
         "application_id": application_id,
         "coverage_tier": simulated_response.get("coverage_tier", expected_tier),
         "original_probability": original_probability,
         "original_probability_text": _format_probability_pct(original_probability),
-        "original_decision": application.get("last_decision"),
-        "original_decision_label": _decision_label(application.get("last_decision")),
+        "original_decision": original_decision,
+        "original_decision_label": _decision_label(original_decision),
         "simulated_probability": simulated_probability,
         "simulated_probability_text": _format_probability_pct(simulated_probability),
-        "simulated_decision": simulated_response.get("decision"),
-        "simulated_decision_label": _decision_label(simulated_response.get("decision")),
-        "simulated_decision_badge_class": _decision_badge_class(simulated_response.get("decision")),
+        "simulated_decision": simulated_decision,
+        "simulated_decision_label": _decision_label(simulated_decision),
+        "simulated_decision_badge_class": _decision_badge_class(simulated_decision),
         "delta": delta,
         "delta_text": _delta_text(delta),
-        "delta_direction": "up" if isinstance(delta, float) and delta > 0 else ("down" if isinstance(delta, float) and delta < 0 else "flat"),
+        "delta_direction": delta_direction,
+        "decision_delta_label": _decision_delta_label(original_decision, simulated_decision),
+        "decision_changed": str(original_decision or "").upper() != str(simulated_decision or "").upper(),
+        "risk_movement_label": _simulation_movement_label(delta_direction),
         "changed_features": changes,
         "change_count": len(changes),
         "model_version": simulated_response.get("model_version"),
@@ -1115,6 +1320,7 @@ def _install_ui(app: Flask) -> None:
             "status.html",
             page_title="System Status",
             active_nav="status",
+            drift_snapshot=_build_drift_snapshot(app),
         )
 
     def analytics():
@@ -1124,7 +1330,7 @@ def _install_ui(app: Flask) -> None:
             active_nav="analytics",
             ui_config=_build_ui_config(app),
             health_snapshot=_build_health_snapshot(app),
-            analytics_config=_build_analytics_config(),
+            analytics_config=_build_analytics_config(app),
         )
 
     def application_new():
@@ -1284,6 +1490,7 @@ def _install_ui(app: Flask) -> None:
             latest_score_run=latest_score_run,
             score_history=score_history,
             report=report,
+            report_chat_context=_build_report_chat_context(application, report),
         )
 
     def ui_static(filename: str):
@@ -1364,6 +1571,7 @@ def _install_ui(app: Flask) -> None:
                 score_data=ctx.get("score_data"),
                 shap_values=ctx.get("shap_values"),
                 page_context=ctx.get("page_context"),
+                report_context=ctx.get("report_context"),
                 conversation_history=payload.get("history", []) if isinstance(payload.get("history"), list) else [],
             )
             return jsonify(result)

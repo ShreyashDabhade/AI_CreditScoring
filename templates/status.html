@@ -36,6 +36,43 @@
     </div>
 </section>
 
+<section class="section section-base">
+    <div class="section-shell">
+        <div class="status-panel">
+            <div class="ui-chip-row status-chip-row">
+                <span class="ui-chip info">Live monitoring</span>
+                <span class="ui-chip neutral">Baseline {{ drift_snapshot.baseline_mean_text }}</span>
+                <span class="ui-chip {% if drift_snapshot.status_label == 'Alert' %}danger{% elif drift_snapshot.status_label == 'Watch' %}warning{% else %}success{% endif %}">
+                    {{ drift_snapshot.sample_size }} / {{ drift_snapshot.lookback }} runs
+                </span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Live Drift Status</span>
+                <span class="status-value">
+                    <span class="decision-badge {{ drift_snapshot.status_badge_class }}">{{ drift_snapshot.status_label }}</span>
+                </span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Baseline Mean PD</span>
+                <span class="status-value">{{ drift_snapshot.baseline_mean_text }}</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Live Mean PD</span>
+                <span class="status-value">{{ drift_snapshot.live_mean_text }}</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Deviation</span>
+                <span class="status-value">{{ drift_snapshot.deviation_pct_text }}</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Sample Size</span>
+                <span class="status-value">{{ drift_snapshot.sample_size }} / {{ drift_snapshot.lookback }}</span>
+            </div>
+            <p class="status-copy">{{ drift_snapshot.alert_message }}</p>
+        </div>
+    </div>
+</section>
+
 <section class="section section-base" id="api-reference">
     <div class="section-shell api-reference">
         <h2>API Endpoints</h2>

@@ -100,6 +100,189 @@
         return makeTable(["Metric", "Value"], rows);
     }
 
+    function makeStatusBadge(label, level) {
+        const badge = document.createElement("span");
+        badge.className = `badge ${
+            level === "success"
+                ? "bg-success"
+                : level === "danger"
+                    ? "bg-danger"
+                    : level === "warning"
+                        ? "bg-warning text-dark"
+                        : "bg-secondary"
+        }`;
+        badge.textContent = label;
+        return badge;
+    }
+
+    function comparisonBadge(payload) {
+        if (payload.status === "stable") {
+            return makeStatusBadge("STABLE", "success");
+        }
+        if (payload.status === "watch") {
+            return makeStatusBadge("WATCH", "warning");
+        }
+        if (payload.available === false) {
+            return makeStatusBadge("UNAVAILABLE", "secondary");
+        }
+        return makeStatusBadge("EXPERIMENTAL", "warning");
+    }
+
+    function appendBadgeRow(container, badges) {
+        const validBadges = badges.filter(Boolean);
+        if (validBadges.length === 0) {
+            return;
+        }
+        const row = document.createElement("div");
+        row.className = "d-flex flex-wrap gap-2 mb-3";
+        validBadges.forEach((badge) => row.appendChild(badge));
+        container.appendChild(row);
+    }
+
+    function fairnessLevelFromFamily(family) {
+        if (!family || family.family_pass === null || family.family_pass === undefined) {
+            return "secondary";
+        }
+        return family.family_pass ? "success" : "warning";
+    }
+
+    function makeFairnessFamilyTable(families) {
+        const rows = (families || []).map((family) => ({
+            Family: family.label || family.family || "Unknown",
+            "DI Min": family.di_min_text || "—",
+            "EOD Gap": family.eod_gap_text || "—",
+            "Brier Ratio": family.brier_ratio_text || "—",
+            DI: family.di_pass,
+            EOD: family.eod_pass,
+            Brier: family.brier_pass,
+        }));
+        return makeTable(["Family", "DI Min", "EOD Gap", "Brier Ratio", "DI", "EOD", "Brier"], rows);
+    }
+
+    function makeComparisonCard(payload, emptyMessage) {
+        const col = document.createElement("div");
+        col.className = "col-lg-6 mb-4";
+
+        const card = document.createElement("div");
+        card.className = "card h-100";
+
+        const body = document.createElement("div");
+        body.className = "card-body";
+
+        const titleRow = document.createElement("div");
+        titleRow.className = "d-flex justify-content-between align-items-start gap-3 flex-wrap";
+
+        const titleWrap = document.createElement("div");
+        const title = document.createElement("h5");
+        title.className = "card-title mb-1";
+        title.textContent = payload.label || "Comparison";
+        titleWrap.appendChild(title);
+
+        if (payload.subtitle) {
+            const subtitle = document.createElement("p");
+            subtitle.className = "text-muted small mb-0";
+            subtitle.textContent = payload.subtitle;
+            titleWrap.appendChild(subtitle);
+        }
+        titleRow.appendChild(titleWrap);
+
+        titleRow.appendChild(comparisonBadge(payload));
+        body.appendChild(titleRow);
+
+        if (payload.headline) {
+            const headline = document.createElement("p");
+            headline.className = "mt-3 mb-3";
+            headline.textContent = payload.headline;
+            body.appendChild(headline);
+        }
+
+        if (Array.isArray(payload.families) && payload.families.length > 0) {
+            appendBadgeRow(
+                body,
+                payload.families.map((family) =>
+                    makeStatusBadge(
+                        `${family.label || family.family}: ${
+                            family.family_pass === true ? "PASS" : family.family_pass === false ? "WATCH" : "N/A"
+                        }`,
+                        fairnessLevelFromFamily(family)
+                    )
+                )
+            );
+            body.appendChild(makeFairnessFamilyTable(payload.families));
+        } else {
+            const empty = document.createElement("div");
+            empty.className = "alert alert-secondary mb-0";
+            empty.textContent = payload.message || emptyMessage;
+            body.appendChild(empty);
+        }
+
+        if (payload.source) {
+            const source = document.createElement("p");
+            source.className = "text-muted small mt-3 mb-0";
+            source.textContent = `Source: ${payload.source}`;
+            body.appendChild(source);
+        }
+
+        card.appendChild(body);
+        col.appendChild(card);
+        return col;
+    }
+
+    function makeFairnessComparisonView(comparison) {
+        const wrap = document.createElement("div");
+
+        const banner = document.createElement("div");
+        banner.className = `alert ${comparison.mode === "live_toggle" ? "alert-success" : "alert-info"}`;
+        banner.innerHTML = comparison.mode === "live_toggle"
+            ? "<strong>Live comparison:</strong> A second deployed fairness-aware runtime was detected."
+            : "<strong>Offline comparison:</strong> No second deployed fairness-aware runtime was detected, so this view compares the live audit against optional offline experiment artifacts only.";
+        wrap.appendChild(banner);
+
+        const explanation = document.createElement("p");
+        explanation.className = "text-muted";
+        explanation.textContent = comparison.tradeoff_explanation || "";
+        wrap.appendChild(explanation);
+
+        appendBadgeRow(wrap, [
+            makeStatusBadge(comparison.mode_label || "Comparison", comparison.mode === "live_toggle" ? "success" : "warning"),
+            makeStatusBadge("Transparency first", "secondary"),
+        ]);
+
+        const row = document.createElement("div");
+        row.className = "row";
+        row.appendChild(
+            makeComparisonCard(
+                comparison.standard || {},
+                "Current deployed fairness audit summary is unavailable."
+            )
+        );
+        row.appendChild(
+            makeComparisonCard(
+                comparison.experimental || {},
+                "No fairness-optimized experimental metrics are available."
+            )
+        );
+        wrap.appendChild(row);
+
+        if (Array.isArray(comparison.experimental && comparison.experimental.tradeoff_notes)
+            && comparison.experimental.tradeoff_notes.length > 0) {
+            const tradeoffs = document.createElement("div");
+            tradeoffs.className = "alert alert-secondary";
+            tradeoffs.innerHTML = `<strong>Trade-offs:</strong><br>${comparison.experimental.tradeoff_notes.join("<br>")}`;
+            wrap.appendChild(tradeoffs);
+        }
+
+        const artifacts = Array.isArray(comparison.artifact_files) ? comparison.artifact_files : [];
+        if (artifacts.length > 0) {
+            const footer = document.createElement("p");
+            footer.className = "text-muted small mb-0";
+            footer.textContent = `Artifacts used: ${artifacts.join(" | ")}`;
+            wrap.appendChild(footer);
+        }
+
+        return wrap;
+    }
+
     function renderQualityReport(report) {
         const wrap = document.createElement("div");
         const heading = document.createElement("h3");
@@ -256,9 +439,49 @@
         }
 
         const content = document.createElement("div");
+        const comparison = analytics.fairnessComparison || {};
         const fairnessPlots = plots.fairness || [];
         const summaryCard = fairnessPlots.find((entry) => entry.filename === "fairness_summary_card.png");
         const otherPlots = fairnessPlots.filter((entry) => entry.filename !== "fairness_summary_card.png");
+        const auditView = document.createElement("div");
+        const comparisonView = document.createElement("div");
+        comparisonView.className = "d-none";
+
+        const viewToggle = document.createElement("div");
+        viewToggle.className = "btn-group mb-4";
+        viewToggle.setAttribute("role", "group");
+        viewToggle.setAttribute("aria-label", "Fairness views");
+
+        const auditButton = document.createElement("button");
+        auditButton.type = "button";
+        auditButton.className = "btn btn-outline-primary active";
+        auditButton.textContent = "Current Audit";
+
+        const comparisonButton = document.createElement("button");
+        comparisonButton.type = "button";
+        comparisonButton.className = "btn btn-outline-primary";
+        comparisonButton.textContent = comparison.mode === "live_toggle"
+            ? "Live Comparison"
+            : "Experimental Comparison";
+
+        const fairnessIntro = document.createElement("p");
+        fairnessIntro.className = "text-muted";
+        fairnessIntro.textContent = "Review the current deployed proxy audit first, then switch to the guarded comparison view to see whether any fairness-oriented experimental artifacts are available.";
+        content.appendChild(fairnessIntro);
+
+        function activateFairnessView(nextView) {
+            const comparisonActive = nextView === "comparison";
+            auditButton.classList.toggle("active", !comparisonActive);
+            comparisonButton.classList.toggle("active", comparisonActive);
+            auditView.classList.toggle("d-none", comparisonActive);
+            comparisonView.classList.toggle("d-none", !comparisonActive);
+        }
+
+        auditButton.addEventListener("click", () => activateFairnessView("audit"));
+        comparisonButton.addEventListener("click", () => activateFairnessView("comparison"));
+        viewToggle.appendChild(auditButton);
+        viewToggle.appendChild(comparisonButton);
+        content.appendChild(viewToggle);
 
         if (summaryCard) {
             const card = document.createElement("div");
@@ -276,11 +499,11 @@
             body.appendChild(title);
             card.appendChild(img);
             card.appendChild(body);
-            content.appendChild(card);
+            auditView.appendChild(card);
         }
 
         if (otherPlots.length > 0) {
-            content.appendChild(makePlotGrid(otherPlots));
+            auditView.appendChild(makePlotGrid(otherPlots));
         }
 
         const fairnessTables = analytics.fairnessTables || {};
@@ -288,12 +511,12 @@
         ["primary", "secondary", "tertiary"].forEach((family) => {
             if (fairnessTables[family]) {
                 renderedTable = true;
-                content.appendChild(makeFamilySection(family, fairnessTables[family]));
+                auditView.appendChild(makeFamilySection(family, fairnessTables[family]));
             }
         });
 
         if (!summaryCard && otherPlots.length === 0 && !renderedTable) {
-            content.appendChild(
+            auditView.appendChild(
                 makeAlert(
                     "Fairness audit data not available. Run Module 4 (fairness_audit.py) first.",
                     "secondary"
@@ -304,7 +527,64 @@
         const disclaimer = document.createElement("div");
         disclaimer.className = "alert alert-warning mt-3";
         disclaimer.innerHTML = "<strong>Regulatory disclaimer:</strong> These metrics evaluate stability across proxy-defined subgroups only and must not be interpreted as proof of fairness across legally protected characteristics.";
-        content.appendChild(disclaimer);
+        auditView.appendChild(disclaimer);
+
+        comparisonView.appendChild(makeFairnessComparisonView(comparison));
+        content.appendChild(auditView);
+        content.appendChild(comparisonView);
+
+        container.replaceChildren(content);
+    }
+
+    function initDrift() {
+        const container = document.getElementById("drift-content");
+        if (!container) {
+            return;
+        }
+
+        const drift = analytics.drift || {};
+        const content = document.createElement("div");
+
+        const heading = document.createElement("h3");
+        heading.className = "h5";
+        heading.textContent = "Live Scoring Drift";
+        content.appendChild(heading);
+
+        const summary = document.createElement("p");
+        summary.className = "text-muted";
+        summary.textContent = "A lightweight model-health monitor using the most recent persisted score runs from SQLite.";
+        content.appendChild(summary);
+
+        appendBadgeRow(content, [
+            makeStatusBadge(String(drift.status_label || "Watch").toUpperCase(), drift.status === "alert" ? "danger" : drift.status === "watch" ? "warning" : "success"),
+            makeStatusBadge(`${drift.sample_size || 0}/${drift.lookback || 0} runs`, "secondary"),
+            makeStatusBadge("SQLite-backed", "secondary"),
+        ]);
+
+        const rows = [
+            { Metric: "Baseline mean PD", Value: drift.baseline_mean_text || "—" },
+            { Metric: "Live mean PD", Value: drift.live_mean_text || "—" },
+            { Metric: "Live std. dev.", Value: drift.live_std_text || "—" },
+            { Metric: "Deviation %", Value: drift.deviation_pct_text || "—" },
+            { Metric: "Sample size", Value: `${drift.sample_size || 0} / ${drift.lookback || 0}` },
+        ];
+        content.appendChild(makeTable(["Metric", "Value"], rows));
+
+        const note = document.createElement("div");
+        note.className = `alert mt-3 ${
+            drift.status === "alert"
+                ? "alert-danger"
+                : drift.status === "watch"
+                    ? "alert-warning"
+                    : "alert-success"
+        }`;
+        note.textContent = drift.alert_message || "Drift signal unavailable.";
+        content.appendChild(note);
+
+        const thresholds = document.createElement("p");
+        thresholds.className = "text-muted small mb-0";
+        thresholds.textContent = `Watch threshold: ${drift.watch_threshold_pct || 0}% | Alert threshold: ${drift.alert_threshold_pct || 0}% | Minimum sample: ${drift.min_sample_size || 0}`;
+        content.appendChild(thresholds);
 
         container.replaceChildren(content);
     }
@@ -334,6 +614,9 @@
                 }
                 if (target === "#fairness-tab-pane") {
                     initFairness();
+                }
+                if (target === "#drift-tab-pane") {
+                    initDrift();
                 }
             });
         });
