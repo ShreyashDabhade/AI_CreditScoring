@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 
 import numpy as np
@@ -76,12 +76,14 @@ def _write_raw_tables(raw_dir: Path, sk_ids: list[int]) -> None:
     raw_dir.mkdir(parents=True, exist_ok=True)
     prev_rows = []
     bureau_rows = []
+    bb_rows = []
     inst_rows = []
     pos_rows = []
     cc_rows = []
 
     for idx, sk_id in enumerate(sk_ids, start=1):
         sk_prev = sk_id * 10
+        sk_bureau = sk_id * 100
         prev_rows.append(
             {
                 "SK_ID_PREV": sk_prev,
@@ -97,14 +99,23 @@ def _write_raw_tables(raw_dir: Path, sk_ids: list[int]) -> None:
         bureau_rows.append(
             {
                 "SK_ID_CURR": sk_id,
+                "SK_ID_BUREAU": sk_bureau,
                 "CREDIT_ACTIVE": "Active" if idx % 2 else "Closed",
                 "AMT_CREDIT_SUM": 50000.0 + idx,
                 "AMT_CREDIT_SUM_DEBT": 10000.0 + idx,
-                "AMT_CREDIT_SUM_OVERDUE": 0.0,
+                "AMT_CREDIT_SUM_OVERDUE": float(idx % 2),
+                "AMT_CREDIT_MAX_OVERDUE": 1000.0 + idx,
                 "CREDIT_DAY_OVERDUE": 0.0,
                 "DAYS_CREDIT": -200.0 - idx,
                 "CNT_CREDIT_PROLONG": 0.0,
             }
+        )
+        bb_rows.extend(
+            [
+                {"SK_ID_BUREAU": sk_bureau, "MONTHS_BALANCE": 0, "STATUS": "0" if idx % 2 else "1"},
+                {"SK_ID_BUREAU": sk_bureau, "MONTHS_BALANCE": -1, "STATUS": "C" if idx % 2 else "0"},
+                {"SK_ID_BUREAU": sk_bureau, "MONTHS_BALANCE": -2, "STATUS": "X"},
+            ]
         )
         inst_rows.append(
             {
@@ -138,6 +149,7 @@ def _write_raw_tables(raw_dir: Path, sk_ids: list[int]) -> None:
         )
 
     pd.DataFrame(bureau_rows).to_csv(raw_dir / "bureau.csv", index=False)
+    pd.DataFrame(bb_rows).to_csv(raw_dir / "bureau_balance.csv", index=False)
     pd.DataFrame(prev_rows).to_csv(raw_dir / "previous_application.csv", index=False)
     pd.DataFrame(inst_rows).to_csv(raw_dir / "installments_payments.csv", index=False)
     pd.DataFrame(pos_rows).to_csv(raw_dir / "POS_CASH_balance.csv", index=False)
@@ -151,6 +163,89 @@ def test_m2_exports_support_m4_contract():
     assert callable(build_full)
     assert callable(fit_full_builder)
     assert callable(pool_rare_categories)
+
+
+def test_full_builder_accepts_public_api_flattened_payload_when_offline_bureau_features_are_absent(tmp_path):
+    from src.api.app import AGG_REQUIRED_FIELDS, APPLICATION_REQUIRED_FIELDS, build_input_df
+    from src.feature_engineering import build_full, fit_full_builder
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [300001, 300002, 300003, 300004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+    builder = fit_full_builder(train_df, raw_dir=str(raw_dir), save_path=None)
+
+    row = train_df.iloc[0]
+    payload = {
+        "application": {field: row[field] for field in APPLICATION_REQUIRED_FIELDS},
+    }
+    for section_name, fields in AGG_REQUIRED_FIELDS.items():
+        payload[section_name] = {field: float(index + 1) for index, field in enumerate(fields)}
+
+    flat_df = build_input_df(payload, "FULL")
+    assert "BB_MAX_STATUS_MEAN" not in flat_df.columns
+    assert "INST_RECENT_365_DPD_MAX" not in flat_df.columns
+
+    transformed = build_full(flat_df, builder, raw_dir=None)
+
+    assert list(transformed.columns) == builder.encoded_columns_
+    assert transformed["BB_MAX_STATUS_MEAN"].notna().all()
+    assert transformed["INST_RECENT_365_DPD_MAX"].notna().all()
+
+
+def test_full_builder_feature_views_exclude_expected_family_columns(tmp_path):
+    from src.feature_engineering import build_full, fit_full_builder
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [310001, 310002, 310003, 310004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+
+    default_builder = fit_full_builder(train_df, raw_dir=str(raw_dir), save_path=None)
+    no_cc_builder = fit_full_builder(
+        train_df,
+        raw_dir=str(raw_dir),
+        save_path=None,
+        feature_view="FULL_NO_CREDIT_CARD",
+    )
+    no_bureau_builder = fit_full_builder(
+        train_df,
+        raw_dir=str(raw_dir),
+        save_path=None,
+        feature_view="FULL_NO_BUREAU",
+    )
+
+    assert any(col.startswith("CC_") for col in default_builder.aggregate_feature_cols_)
+    assert not any(col.startswith("CC_") for col in no_cc_builder.aggregate_feature_cols_)
+    assert any(col.startswith("BUREAU_") or col.startswith("BB_") for col in default_builder.aggregate_feature_cols_)
+    assert not any(col.startswith("BUREAU_") or col.startswith("BB_") for col in no_bureau_builder.aggregate_feature_cols_)
+
+    transformed_no_cc = build_full(train_df, no_cc_builder, raw_dir=str(raw_dir), feature_view="FULL_NO_CREDIT_CARD")
+    transformed_no_bureau = build_full(train_df, no_bureau_builder, raw_dir=str(raw_dir), feature_view="FULL_NO_BUREAU")
+
+    assert list(transformed_no_cc.columns) == no_cc_builder.encoded_columns_
+    assert list(transformed_no_bureau.columns) == no_bureau_builder.encoded_columns_
+    assert "CC_BALANCE_MEAN" not in transformed_no_cc.columns
+    assert "BUREAU_LOAN_COUNT" not in transformed_no_bureau.columns
+    assert "BB_MAX_STATUS_MEAN" not in transformed_no_bureau.columns
+
+
+def test_fit_full_builder_is_pure_without_save_path(tmp_path):
+    from src.feature_engineering import fit_full_builder
+
+    raw_dir = tmp_path / "raw"
+    sk_ids = [300001, 300002, 300003, 300004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+
+    project_root = Path(__file__).resolve().parents[1]
+    shared_artifacts = project_root / "artifacts"
+    before = sorted(path.name for path in shared_artifacts.iterdir()) if shared_artifacts.exists() else []
+    builder = fit_full_builder(train_df, raw_dir=str(raw_dir), save_path=None)
+    after = sorted(path.name for path in shared_artifacts.iterdir()) if shared_artifacts.exists() else []
+
+    assert builder.tier == "FULL"
+    assert before == after
 
 
 def test_m4_derives_pooled_groups_via_m2_contract(tmp_path, monkeypatch):
@@ -174,6 +269,9 @@ def test_m4_derives_pooled_groups_via_m2_contract(tmp_path, monkeypatch):
     assert "HOUSING_TYPE_POOLED" in result.columns
     assert set(result["INCOME_TYPE_POOLED"]) == {"OTHER"}
     assert set(result["HOUSING_TYPE_POOLED"]) == {"OTHER"}
+    assert result["FAIR_GROUP_PRIMARY"].tolist() == ["REGION_1", "REGION_2", "REGION_3"]
+    assert result["FAIR_GROUP_SECONDARY"].tolist() == ["INCOME_T1", "INCOME_T2", "INCOME_T3"]
+    assert result["FAIR_GROUP_TERTIARY"].str.contains("__").all()
 
 
 def test_m2_full_builder_and_m4_audit_flow(tmp_path, monkeypatch):
@@ -257,3 +355,50 @@ def test_builder_shim_loads_or_fits_m2_builder_for_m4(tmp_path, monkeypatch):
     assert isinstance(built, FrozenFeatureBuilder)
     assert isinstance(loaded, FrozenFeatureBuilder)
     assert builder_path.exists()
+    assert builder_path.with_suffix(".manifest.json").exists()
+
+
+def test_builder_artifacts_strict_loader_validates_saved_builders(tmp_path):
+    import json
+
+    from src.builder_artifacts import load_validated_builders
+    from src.feature_engineering import fit_full_builder, fit_reduced_builder
+
+    artifact_dir = tmp_path / "artifacts"
+    processed_dir = tmp_path / "processed"
+    raw_dir = tmp_path / "raw"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    processed_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = processed_dir / "processed_artifact_manifest.json"
+    manifest_path.write_text(
+        json.dumps({"processed_manifest_fingerprint": "fp-test-001"}),
+        encoding="utf-8",
+    )
+
+    sk_ids = [400001, 400002, 400003, 400004]
+    _write_raw_tables(raw_dir, sk_ids)
+    train_df = _make_application_df(sk_ids)
+
+    fit_full_builder(
+        train_df,
+        raw_dir=str(raw_dir),
+        save_path=str(artifact_dir / "full_feature_builder.joblib"),
+        processed_manifest_path=str(manifest_path),
+    )
+    fit_reduced_builder(
+        train_df,
+        save_path=str(artifact_dir / "reduced_feature_builder.joblib"),
+        processed_manifest_path=str(manifest_path),
+    )
+
+    builders = load_validated_builders(
+        artifact_dir=str(artifact_dir),
+        processed_dir=str(processed_dir),
+        strict_artifacts=True,
+    )
+
+    assert builders["FULL"].tier == "FULL"
+    assert builders["REDUCED"].tier == "REDUCED"
+
+

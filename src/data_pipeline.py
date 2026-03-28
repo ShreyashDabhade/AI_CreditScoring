@@ -17,6 +17,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import json
 
+from src.runtime_verification import (
+    dataframe_schema_hash,
+    safe_git_commit,
+    sha256_json,
+    validate_processed_splits,
+)
+
 
 # ================================
 # CONSTANTS
@@ -157,7 +164,7 @@ def apply_missing_policy(
 # ================================
 
 # ordered holdout using Home Credit recency proxies;
-# not true calendar-time validation
+# oldest rows first, newest rows last; not true calendar-time validation
 def proxy_recency_sort(app_df: pd.DataFrame) -> pd.DataFrame:
     tmp = app_df.copy()
 
@@ -170,7 +177,7 @@ def proxy_recency_sort(app_df: pd.DataFrame) -> pd.DataFrame:
 
     tmp = tmp.sort_values(
         ["__RECENCY_1", "__RECENCY_2", "SK_ID_CURR"],
-        ascending=[True, True, True]
+        ascending=[False, False, True]
     )
 
     tmp = tmp.drop(columns=["__RECENCY_1", "__RECENCY_2"])
@@ -223,6 +230,64 @@ def build_adversarial_dataset(train_app: pd.DataFrame, test_app: pd.DataFrame):
         adv_X_val.reset_index(drop=True)
     )
 
+
+
+
+def _build_processed_manifest(
+    train: pd.DataFrame,
+    val_model: pd.DataFrame,
+    val_policy: pd.DataFrame,
+    test: pd.DataFrame,
+    adv_train_df: pd.DataFrame,
+    adv_val_df: pd.DataFrame,
+    income_cap: float,
+) -> dict[str, object]:
+    split_verification = validate_processed_splits(
+        {
+            "train": train,
+            "val_model": val_model,
+            "val_policy": val_policy,
+            "test": test,
+        }
+    )
+    git_commit = safe_git_commit(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    manifest = {
+        "manifest_version": 1,
+        "git_commit": git_commit,
+        "application_train_cleaned_rows": int(len(train) + len(val_model) + len(val_policy) + len(test)),
+        "income_cap": float(income_cap),
+        "split_fingerprints": split_verification["split_fingerprints"],
+        "split_schema_hashes": split_verification["split_schema_hashes"],
+        "split_summary": split_verification["split_summary"],
+        "duplicate_summary": split_verification["duplicate_summary"],
+        "adversarial_summary": {
+            "adv_train_rows": int(len(adv_train_df)),
+            "adv_val_rows": int(len(adv_val_df)),
+            "diagnostic_only": True,
+            "income_cap_used": float(income_cap),
+            "git_commit": git_commit,
+            "schema_hash": dataframe_schema_hash(adv_train_df),
+        },
+    }
+    manifest["processed_manifest_fingerprint"] = sha256_json(
+        {
+            "manifest_version": manifest["manifest_version"],
+            "application_train_cleaned_rows": manifest["application_train_cleaned_rows"],
+            "income_cap": manifest["income_cap"],
+            "split_fingerprints": manifest["split_fingerprints"],
+            "split_schema_hashes": manifest["split_schema_hashes"],
+            "split_summary": manifest["split_summary"],
+            "duplicate_summary": manifest["duplicate_summary"],
+            "adversarial_summary": manifest["adversarial_summary"],
+        }
+    )
+    return manifest
+
+
+def _write_processed_manifest(path: str, manifest: dict[str, object]) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+    print(f"Saved {path}")
 
 # ================================
 # MAIN EXECUTION BLOCK
@@ -382,6 +447,21 @@ if __name__ == "__main__":
 
     joblib.dump(income_cap, DATA_PROCESSED_DIR + "income_cap.joblib")
     print(f"income_cap = {income_cap:.2f} saved")
+
+    processed_manifest = _build_processed_manifest(
+        train,
+        val_model,
+        val_policy,
+        test,
+        adv_train_df,
+        adv_val_df,
+        float(income_cap),
+    )
+    processed_manifest_path = os.path.join(
+        DATA_PROCESSED_DIR,
+        "processed_artifact_manifest.json",
+    )
+    _write_processed_manifest(processed_manifest_path, processed_manifest)
 
     # ================================
     # RELOAD VERIFICATION

@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section hero-section">
+    <div class="section-shell hero-grid">
+        <div class="hero-copy">
+            <p class="eyebrow">Credit Risk Intelligence</p>
+            <h1>Intelligent Credit Decisions</h1>
+            <p>
+                MasterMind AI combines explainability, fairness auditing,
+                and calibrated probability into a single scoring system.
+            </p>
+            <div class="button-row">
+                <a class="button button-primary" href="{{ url_for('analyze') }}">Analyse an Application</a>
+                <a class="button button-ghost" href="{{ url_for('status_page') }}">View System Status</a>
+            </div>
+        </div>
+        <div class="hero-void" aria-hidden="true"></div>
+    </div>
+</section>
+
+<section class="section section-mid" id="features">
+    <div class="section-shell">
+        <div class="section-intro centered-intro">
+            <h2>Built for explainable decisions</h2>
+            <p>
+                Every score includes a calibrated probability, a policy
+                decision, and the top SHAP drivers behind that decision.
+            </p>
+        </div>
+
+        <div class="feature-grid">
+            <article class="feature-block">
+                <svg viewBox="0 0 48 48" aria-hidden="true">
+                    <path d="M8 34h8V18H8zm12 0h8V10h-8zm12 0h8V24h-8z"></path>
+                </svg>
+                <h3>Calibrated Probability</h3>
+                <p>
+                    Probabilities are isotonically calibrated on a held-out policy validation set, ensuring
+                    reliable probability estimates across the full [0, 1] range.
+                </p>
+            </article>
+
+            <article class="feature-block">
+                <svg viewBox="0 0 48 48" aria-hidden="true">
+                    <path d="M10 12h28v6H10zm0 12h18v6H10zm0 12h28v2H10z"></path>
+                </svg>
+                <h3>SHAP Explainability</h3>
+                <p>
+                    The top 5 feature drivers surface with every response,
+                    making each decision auditable and transparent.
+                </p>
+            </article>
+
+            <article class="feature-block">
+                <svg viewBox="0 0 48 48" aria-hidden="true">
+                    <path d="m24 7 14 6v9c0 8.6-5.8 16.3-14 18.5C15.8 38.3 10 30.6 10 22v-9zm-3.1 20.4 11.8-11.8-2.8-2.8-9 9-4.7-4.7-2.8 2.8z"></path>
+                </svg>
+                <h3>Fairness Audited</h3>
+                <p>
+                    A proxy fairness audit runs offline before deployment.
+                    The result is reflected on every scored response.
+                </p>
+            </article>
+        </div>
+    </div>
+</section>
+
+<section class="section section-base" id="coverage-tiers">
+    <div class="section-shell two-column-copy">
+        <article>
+            <p class="eyebrow">Reduced Tier</p>
+            <h2>Fast application-only scoring</h2>
+            <p>
+                Use the REDUCED path when only application-level fields are
+                available. Maps to the application section of the API contract
+                with 33 required fields.
+            </p>
+            <p class="hint-line">AMT_INCOME_TOTAL_CAPPED · AMT_CREDIT · EXT_SOURCE_1/2/3 · DAYS_EMPLOYED</p>
+        </article>
+
+        <article>
+            <p class="eyebrow">Full Tier</p>
+            <h2>Maximum accuracy with aggregates</h2>
+            <p>
+                The FULL path adds bureau, previous application, installment,
+                POS cash, and credit card aggregates for the highest-fidelity
+                score from the trained pipeline.
+            </p>
+            <p class="hint-line">bureau_agg · previous_agg · installments_agg · pos_cash_agg · credit_card_agg</p>
+        </article>
+    </div>
+</section>
+
+<section class="section section-mid">
+    <div class="section-shell centered-band">
+        <h2>Ready to score an application?</h2>
+        <p>
+            Choose your coverage tier, fill in the fields, and receive
+            a calibrated decision with full SHAP explanations.
+        </p>
+        <a class="button button-primary button-large" href="{{ url_for('analyze') }}">Analyse an Application</a>
+    </div>
+</section>
+
+<section class="section section-base" id="about">
+    <div class="section-shell about-block">
+        <h2>About MasterMind AI</h2>
+        <p>MasterMind AI is an explainable credit scoring system built on the Home Credit Default Risk dataset.</p>
+        <p>The pipeline runs through five modules: data preparation, feature engineering, model training and calibration, fairness auditing, and a live Flask API.</p>
+        <p>Every decision from the API includes a calibrated probability of default, a policy outcome - APPROVE, REVIEW, or DECLINE - and the top five SHAP feature drivers.</p>
+    </div>
+</section>
+{% endblock %}

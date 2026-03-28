@@ -15,15 +15,15 @@ Conflicts resolvable by wiring only: 1
 **Resolution applied**: `src/fairness_audit.py` — added `_load_or_fit_full_builder(...)` and switched the real-data orchestration path to use it.
 **Status**: RESOLVED
 
-## CONFLICT-02: Real-Data Module 4 Path Still Depends on Module 3 Artifacts
-**Type**: missing implementation
-**Producer**: Module 3 — `src/models/train.py`
-**Consumer**: Module 4 — `src/fairness_audit.py`
-**Description**: The real-data Module 4 orchestration path still requires `load_artifacts()` and `decision_from_pd()` from Module 3. Current `main` does not yet provide those symbols, so end-to-end real-data Module 4 execution remains blocked outside the M2↔M4 boundary.
-**Resolution**: Leave the M2↔M4 integration intact, verify it with isolated synthetic tests, and defer the real-data runtime hookup until Module 3 lands.
-**Stage to fix**: Stage 3
-**Status**: FLAGGED — requires manual review
-**Reason**: Resolving this now would require implementing Module 3 internals, which is outside the requested M2↔M4 integration slice.
+## CONFLICT-02: Historical Module 4 Dependency On Module 3 Artifacts
+**Type**: historical note
+**Producer**: Module 3 - `src/models/train.py`
+**Consumer**: Module 4 - `src/fairness_audit.py`
+**Description**: Earlier integration notes recorded that the real-data Module 4 orchestration path depended on `load_artifacts()` and `decision_from_pd()` from Module 3 before those symbols were fully wired.
+**Resolution**: This is now superseded. `src/models/train.py` exports both symbols, the real-data fairness audit path executes end to end, and current verification covers the Module 3 to Module 4 runtime boundary.
+**Stage to fix**: Superseded
+**Status**: RESOLVED
+**Reason**: Keep this entry only as historical context so the repo no longer suggests that the current real-data Module 4 path is still blocked.
 
 ## No-conflict confirmations
 - M2 exports `pool_rare_categories()`, and Module 4 consumes it directly inside `derive_fairness_groups()` without signature mismatch.

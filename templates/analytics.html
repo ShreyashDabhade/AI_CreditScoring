@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">Analytics</p>
+        <h1>Pipeline Artifacts Dashboard</h1>
+        <p class="page-intro">
+            Read-only access to pre-generated EDA, evaluation, SHAP, and fairness audit artifacts.
+        </p>
+    </div>
+</section>
+
+<section class="section section-base">
+    <div class="section-shell">
+        <ul class="nav nav-tabs" id="analytics-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="eda-tab" data-bs-toggle="tab" data-bs-target="#eda-tab-pane" type="button" role="tab" aria-controls="eda-tab-pane" aria-selected="true">
+                    EDA &amp; Data Quality
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="eval-tab" data-bs-toggle="tab" data-bs-target="#eval-tab-pane" type="button" role="tab" aria-controls="eval-tab-pane" aria-selected="false">
+                    Model Evaluation
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="shap-tab" data-bs-toggle="tab" data-bs-target="#shap-tab-pane" type="button" role="tab" aria-controls="shap-tab-pane" aria-selected="false">
+                    SHAP Analysis
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="fairness-tab" data-bs-toggle="tab" data-bs-target="#fairness-tab-pane" type="button" role="tab" aria-controls="fairness-tab-pane" aria-selected="false">
+                    Fairness Audit
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content bg-white text-dark rounded-bottom p-4" id="analytics-tab-content">
+            <div class="tab-pane fade show active" id="eda-tab-pane" role="tabpanel" aria-labelledby="eda-tab" tabindex="0">
+                <div id="eda-content">
+                    <div class="d-flex justify-content-center py-5">
+                        <div class="spinner-border" role="status" aria-label="Loading EDA content"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="eval-tab-pane" role="tabpanel" aria-labelledby="eval-tab" tabindex="0">
+                <div id="eval-content">
+                    <div class="d-flex justify-content-center py-5">
+                        <div class="spinner-border" role="status" aria-label="Loading evaluation content"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="shap-tab-pane" role="tabpanel" aria-labelledby="shap-tab" tabindex="0">
+                <div id="shap-content">
+                    <div class="d-flex justify-content-center py-5">
+                        <div class="spinner-border" role="status" aria-label="Loading SHAP content"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tab-pane fade" id="fairness-tab-pane" role="tabpanel" aria-labelledby="fairness-tab" tabindex="0">
+                <div id="fairness-content">
+                    <div class="d-flex justify-content-center py-5">
+                        <div class="spinner-border" role="status" aria-label="Loading fairness content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.__MASTERMIND_ANALYTICS__ = {{ analytics_config | tojson }};
+</script>
+<script src="{{ url_for('ui_static', filename='analytics.js') }}"></script>
+{% endblock %}

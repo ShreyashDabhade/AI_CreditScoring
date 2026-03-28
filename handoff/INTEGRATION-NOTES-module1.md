@@ -3,8 +3,9 @@
 ### What this module does
 Loads 7 raw Home Credit CSVs, enforces an allowlist, applies 6
 data traps (sentinel removal, schema enforcement, income capping),
-sorts by proxy recency, splits 60/10/10/20, and serializes 5
-DataFrames plus a scalar income_cap to disk.
+sorts by proxy staleness (oldest to newest), splits 60/10/10/20, and writes 5
+DataFrames plus a scalar income_cap, a processed-artifact manifest, and reproducible
+diagnostic reports to disk.
 
 ### What it expects from other modules
 Nothing. Module 1 has zero upstream dependencies.
@@ -14,7 +15,7 @@ from src.data_pipeline import (
   enforce_locked_tables, enforce_schema, proxy_recency_sort,
   ordered_split_60_10_10_20, fit_missing_policy,
   apply_missing_policy, build_adversarial_dataset,
-  serialize_dataframe, TRAIN_SCHEMA, LOCKED_SCORING_TABLES,
+  TRAIN_SCHEMA, LOCKED_SCORING_TABLES,
   ADVERSARIAL_ONLY_TABLES, PREV_SENTINEL_DAY_COLS,
   RELATIVE_TIME_COLS
 )
@@ -32,3 +33,7 @@ from src.data_pipeline import (
    train.pkl — do not recreate them in Module 2.
 5. application_test.csv rows are in adv_train/adv_val only.
    They must never enter any scoring feature matrix.
+6. data/processed/processed_artifact_manifest.json is part of the
+   strict runtime contract. Downstream modules should validate against
+   it rather than inferring processed-data lineage from filenames.
+

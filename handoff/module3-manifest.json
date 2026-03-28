@@ -1,0 +1,33 @@
+{
+  "module": "Model Training",
+  "exports": [
+    "decision_from_pd(probability_of_default: float) -> str",
+    "load_artifacts(artifact_dir: str = ARTIFACT_DIR, processed_dir: str = DATA_DIR, strict_artifacts: bool = false) -> dict[str, Any]",
+    "train_models(artifact_dir: str = ARTIFACT_DIR, processed_dir: str = DATA_DIR, raw_dir: str = \"data/raw/\") -> dict[str, Any]"
+  ],
+  "artifacts": {
+    "builders": [
+      "full_feature_builder.joblib",
+      "full_feature_builder.manifest.json",
+      "reduced_feature_builder.joblib",
+      "reduced_feature_builder.manifest.json"
+    ],
+    "models": [
+      "full_model.joblib",
+      "full_calibrator.joblib",
+      "full_shap_explainer.joblib",
+      "reduced_model.joblib",
+      "reduced_calibrator.joblib",
+      "reduced_shap_explainer.joblib"
+    ],
+    "metadata": [
+      "reproducibility_report.json",
+      "model_fairness_audit_passed.joblib"
+    ]
+  },
+  "notes": {
+    "current_model_family": "train_models() currently selects a FULL weighted XGBoost plus LightGBM blend runtime candidate, persists FULL XGBoost fallback artifacts for analysis, and deploys a REDUCED XGBoost tier.",
+    "fairness_placeholder": "Module 3 writes model_fairness_audit_passed.joblib as False. Module 4 overwrites the final result after the fairness audit runs.",
+    "builder_loading": "load_artifacts() must load builders through src/builder_artifacts.py and scope every artifact to the passed artifact_dir."
+  }
+}

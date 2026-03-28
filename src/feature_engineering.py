@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import json
 import os
+import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+
+from src.runtime_verification import (
+    column_sequence_hash,
+    dataframe_fingerprint,
+    rare_map_schema_hash,
+    safe_git_commit,
+)
+
+if __name__ == "__main__":
+    # Preserve a single canonical module identity when this file is run via
+    # `python -m src.feature_engineering` so persisted builders unpickle as
+    # src.feature_engineering.FrozenFeatureBuilder in later processes.
+    sys.modules.setdefault("src.feature_engineering", sys.modules[__name__])
 
 CATEGORICAL_MODEL_COLS = [
     "NAME_CONTRACT_TYPE",
@@ -68,6 +84,17 @@ ENGINEERED_APP_FEATURE_COLS = [
     "ID_PUBLISH_REG_RATIO",
     "EXT_SOURCE_MEAN",
     "EXT_SOURCE_STD",
+    "EXT_12_PRODUCT",
+    "EXT_13_PRODUCT",
+    "EXT_23_PRODUCT",
+    "EXT_123_PRODUCT",
+    "EXT_12_DIFF",
+    "EXT_13_DIFF",
+    "EXT_23_DIFF",
+    "EXT_MIN",
+    "EXT_MAX",
+    "EXT_RANGE",
+    "EXT_SOURCE_COUNT",
     "SOCIAL_CIRCLE_SUM",
     "BUREAU_REQUEST_SUM",
     "DAYS_EMPLOYED_ANOM",
@@ -83,6 +110,16 @@ BUREAU_AGG_COLS = [
     "BUREAU_CREDIT_DAY_OVERDUE_MAX",
     "BUREAU_DAYS_CREDIT_MAX",
     "BUREAU_CNT_CREDIT_PROLONG_SUM",
+    "BUREAU_ACTIVE_SHARE",
+    "BUREAU_AMT_CREDIT_MAX_OVERDUE_MAX",
+    "BUREAU_ACTIVE_DEBT_RATIO",
+    "BUREAU_DAYS_CREDIT_MEAN",
+    "BUREAU_DAYS_CREDIT_MIN",
+    "BB_MONTHS_COUNT_MEAN",
+    "BB_MAX_STATUS_MAX",
+    "BB_MAX_STATUS_MEAN",
+    "BB_ADVERSE_ACCOUNT_RATE",
+    "BB_ADVERSE_RATE_MEAN",
 ]
 PREVIOUS_AGG_COLS = [
     "PREV_APP_COUNT",
@@ -105,6 +142,12 @@ INSTALLMENTS_AGG_COLS = [
     "INST_PAYMENT_RATIO_MEAN",
     "INST_PAYMENT_RATIO_MIN",
     "INST_LATE_COUNT",
+    "INST_PAYMENT_RATIO_STD",
+    "INST_UNDERPAY_RATE",
+    "INST_SEVERE_DPD_RATE",
+    "INST_RECENT_365_DPD_MEAN",
+    "INST_RECENT_365_DPD_MAX",
+    "INST_RECENT_365_PAYMENT_RATIO_MEAN",
 ]
 POS_CASH_AGG_COLS = [
     "POS_RECORD_COUNT",
@@ -134,8 +177,28 @@ ALL_AGGREGATE_FEATURE_COLS = (
     + POS_CASH_AGG_COLS
     + CREDIT_CARD_AGG_COLS
 )
+AGGREGATE_FAMILY_COLS = {
+    "BUREAU": BUREAU_AGG_COLS,
+    "PREVIOUS_APPLICATION": PREVIOUS_AGG_COLS,
+    "INSTALLMENTS": INSTALLMENTS_AGG_COLS,
+    "POS_CASH": POS_CASH_AGG_COLS,
+    "CREDIT_CARD": CREDIT_CARD_AGG_COLS,
+}
+DEFAULT_FULL_FEATURE_VIEW = "FULL_COMPLETE"
+FULL_FEATURE_VIEWS = {
+    "FULL_COMPLETE": ("BUREAU", "PREVIOUS_APPLICATION", "INSTALLMENTS", "POS_CASH", "CREDIT_CARD"),
+    "FULL_NO_CREDIT_CARD": ("BUREAU", "PREVIOUS_APPLICATION", "INSTALLMENTS", "POS_CASH"),
+    "FULL_NO_POS_CASH": ("BUREAU", "PREVIOUS_APPLICATION", "INSTALLMENTS", "CREDIT_CARD"),
+    "FULL_NO_PREVIOUS_APPLICATION": ("BUREAU", "INSTALLMENTS", "POS_CASH", "CREDIT_CARD"),
+    "FULL_NO_INSTALLMENTS": ("BUREAU", "PREVIOUS_APPLICATION", "POS_CASH", "CREDIT_CARD"),
+    "FULL_NO_BUREAU": ("PREVIOUS_APPLICATION", "INSTALLMENTS", "POS_CASH", "CREDIT_CARD"),
+}
 FULL_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/full_feature_builder.joblib"
 REDUCED_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/reduced_feature_builder.joblib"
+FULL_FEATURE_BUILDER_MANIFEST_PATH = "artifacts/full_feature_builder.manifest.json"
+REDUCED_FEATURE_BUILDER_MANIFEST_PATH = "artifacts/reduced_feature_builder.manifest.json"
+FEATURE_ENGINEERING_VERSION = "feature-engineering-manifest-v2"
+AGGREGATE_CONTRACT_VERSION = f"full_{len(ALL_AGGREGATE_FEATURE_COLS)}__reduced_0"
 PROCESSED_SPLIT_NAMES = ["train", "val_model", "val_policy", "test"]
 __all__ = [
     "FrozenFeatureBuilder",
@@ -148,6 +211,7 @@ __all__ = [
     "assert_unique_key",
     "safe_left_merge_one_to_one",
     "prefix_columns",
+    "resolve_full_feature_view",
 ]
 
 
@@ -164,12 +228,26 @@ class FrozenFeatureBuilder:
     aggregate_feature_cols_: list[str] = field(default_factory=list)
     categorical_columns_: list[str] = field(default_factory=list)
     scaler_: StandardScaler | None = None
+    fit_row_count_: int = 0
+    fit_split_name_: str = "train"
+    dataset_fingerprint_: str = ""
+    processed_manifest_fingerprint_: str | None = None
+    feature_engineering_version_: str = FEATURE_ENGINEERING_VERSION
+    aggregate_contract_version_: str = AGGREGATE_CONTRACT_VERSION
 
     def save(self, path: str) -> None:
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        joblib.dump(self, path)
+        tmp_path = f"{path}.tmp"
+        joblib.dump(self, tmp_path)
+        os.replace(tmp_path, path)
+        manifest_path = _builder_manifest_path(path)
+        manifest = _build_builder_manifest(self)
+        tmp_manifest_path = f"{manifest_path}.tmp"
+        with open(tmp_manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2, sort_keys=True)
+        os.replace(tmp_manifest_path, manifest_path)
 
     def transform(
         self,
@@ -180,6 +258,62 @@ class FrozenFeatureBuilder:
         return _transform_with_builder(df, self, for_linear_model, raw_dir)
 
 
+FrozenFeatureBuilder.__module__ = "src.feature_engineering"
+
+
+
+
+def _builder_manifest_path(builder_path: str) -> str:
+    if builder_path.endswith(".joblib"):
+        return builder_path[:-7] + ".manifest.json"
+    return builder_path + ".manifest.json"
+
+
+def _default_processed_manifest_path() -> str:
+    return os.path.join(
+        os.environ.get("DATA_PROCESSED_DIR", "data/processed/"),
+        "processed_artifact_manifest.json",
+    )
+
+
+def _load_processed_manifest_fingerprint(processed_manifest_path: str | None = None) -> str | None:
+    manifest_path = processed_manifest_path or _default_processed_manifest_path()
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except Exception:
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    fingerprint = manifest.get("processed_manifest_fingerprint")
+    return str(fingerprint) if fingerprint else None
+
+
+def _build_builder_manifest(builder: FrozenFeatureBuilder) -> dict[str, object]:
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return {
+        "manifest_version": 2,
+        "feature_engineering_version": builder.feature_engineering_version_,
+        "git_commit": safe_git_commit(project_root),
+        "fit_timestamp": datetime.now(timezone.utc).isoformat(),
+        "builder_tier": builder.tier.upper(),
+        "fit_row_count": int(builder.fit_row_count_),
+        "fit_split_name": builder.fit_split_name_,
+        "dataset_fingerprint": builder.dataset_fingerprint_,
+        "processed_manifest_fingerprint": builder.processed_manifest_fingerprint_,
+        "pre_model_column_schema_hash": column_sequence_hash(builder.pre_model_columns_),
+        "encoded_column_count": int(len(builder.encoded_columns_)),
+        "encoded_column_schema_hash": column_sequence_hash(builder.encoded_columns_),
+        "rare_map_schema_hash": rare_map_schema_hash(builder.rare_category_maps_),
+        "rare_map_sizes": {
+            key: len(value) for key, value in sorted(builder.rare_category_maps_.items())
+        },
+        "categorical_columns": list(builder.categorical_columns_),
+        "aggregate_contract_version": builder.aggregate_contract_version_,
+    }
+
 def pool_rare_categories(series: pd.Series, min_count: int = 500) -> pd.Series:
     vc = series.value_counts(dropna=False)
     keep = vc[vc >= min_count].index
@@ -189,6 +323,27 @@ def pool_rare_categories(series: pd.Series, min_count: int = 500) -> pd.Series:
 def safe_div(a: pd.Series | np.ndarray, b: pd.Series | np.ndarray) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore"):
         return np.where((pd.notna(a)) & (pd.notna(b)) & (b != 0), a / b, np.nan)
+
+
+def resolve_full_feature_view(feature_view: str | None) -> tuple[str, tuple[str, ...], list[str]]:
+    view_name = DEFAULT_FULL_FEATURE_VIEW if feature_view is None else str(feature_view).upper()
+    if view_name not in FULL_FEATURE_VIEWS:
+        raise ValueError(f"Unsupported FULL feature view: {feature_view!r}")
+    families = FULL_FEATURE_VIEWS[view_name]
+    aggregate_feature_cols: list[str] = []
+    for family in families:
+        aggregate_feature_cols.extend(AGGREGATE_FAMILY_COLS[family])
+    return view_name, families, aggregate_feature_cols
+
+
+def _aggregate_contract_version_for_view(
+    feature_view: str | None,
+    aggregate_feature_cols: list[str],
+) -> str:
+    view_name, _, _ = resolve_full_feature_view(feature_view)
+    if view_name == DEFAULT_FULL_FEATURE_VIEW and list(aggregate_feature_cols) == list(ALL_AGGREGATE_FEATURE_COLS):
+        return AGGREGATE_CONTRACT_VERSION
+    return f"{view_name.lower()}__full_{len(aggregate_feature_cols)}__reduced_0"
 
 
 def assert_unique_key(df: pd.DataFrame, key: str, name: str) -> None:
@@ -217,15 +372,30 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     assert "AMT_INCOME_TOTAL_CAPPED" in df.columns, "AMT_INCOME_TOTAL_CAPPED missing - Module 1 not applied"
     assert "DAYS_EMPLOYED_ANOM" in df.columns, "DAYS_EMPLOYED_ANOM missing - Module 1 Trap A not applied"
+    ext_cols = ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]
+    ext1 = df["EXT_SOURCE_1"]
+    ext2 = df["EXT_SOURCE_2"]
+    ext3 = df["EXT_SOURCE_3"]
     df["AGE_YEARS"] = -df["DAYS_BIRTH"] / 365
-    df["CREDIT_INCOME_RATIO"] = safe_div(df["AMT_CREDIT"], df["AMT_INCOME_TOTAL_CAPPED"])
-    df["ANNUITY_INCOME_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_INCOME_TOTAL_CAPPED"])
+    df["CREDIT_INCOME_RATIO"] = safe_div(df["AMT_CREDIT"], df["AMT_INCOME_TOTAL_CAPPED"] )
+    df["ANNUITY_INCOME_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_INCOME_TOTAL_CAPPED"] )
     df["GOODS_CREDIT_RATIO"] = safe_div(df["AMT_GOODS_PRICE"], df["AMT_CREDIT"])
     df["CREDIT_TERM_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_CREDIT"])
     df["EMPLOYED_BIRTH_RATIO"] = safe_div(df["DAYS_EMPLOYED"], df["DAYS_BIRTH"])
     df["ID_PUBLISH_REG_RATIO"] = safe_div(df["DAYS_ID_PUBLISH"], df["DAYS_REGISTRATION"])
-    df["EXT_SOURCE_MEAN"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].mean(axis=1)
-    df["EXT_SOURCE_STD"] = df[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].std(axis=1)
+    df["EXT_SOURCE_MEAN"] = df[ext_cols].mean(axis=1)
+    df["EXT_SOURCE_STD"] = df[ext_cols].std(axis=1)
+    df["EXT_12_PRODUCT"] = ext1 * ext2
+    df["EXT_13_PRODUCT"] = ext1 * ext3
+    df["EXT_23_PRODUCT"] = ext2 * ext3
+    df["EXT_123_PRODUCT"] = df[ext_cols].prod(axis=1, min_count=len(ext_cols))
+    df["EXT_12_DIFF"] = ext1 - ext2
+    df["EXT_13_DIFF"] = ext1 - ext3
+    df["EXT_23_DIFF"] = ext2 - ext3
+    df["EXT_MIN"] = df[ext_cols].min(axis=1)
+    df["EXT_MAX"] = df[ext_cols].max(axis=1)
+    df["EXT_RANGE"] = df["EXT_MAX"] - df["EXT_MIN"]
+    df["EXT_SOURCE_COUNT"] = df[ext_cols].notna().sum(axis=1).astype("int8")
     df["SOCIAL_CIRCLE_SUM"] = (
         df["OBS_30_CNT_SOCIAL_CIRCLE"].fillna(0)
         + df["DEF_30_CNT_SOCIAL_CIRCLE"].fillna(0)
@@ -244,8 +414,65 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _agg_bureau_balance(bureau_df: pd.DataFrame, raw_dir: str) -> pd.DataFrame:
+    bb = pd.read_csv(
+        os.path.join(raw_dir, "bureau_balance.csv"),
+        usecols=["SK_ID_BUREAU", "MONTHS_BALANCE", "STATUS"],
+    ).copy()
+    bb["BB_STATUS_SEVERITY"] = bb["STATUS"].map({
+        "X": np.nan,
+        "C": 0.0,
+        "0": 0.0,
+        "1": 1.0,
+        "2": 2.0,
+        "3": 3.0,
+        "4": 4.0,
+        "5": 5.0,
+    }).astype(float)
+    bb["BB_ADVERSE_FLAG"] = bb["STATUS"].isin(["1", "2", "3", "4", "5"]).astype("int8")
+    g = bb.groupby("SK_ID_BUREAU")
+    out = pd.DataFrame(index=g.size().index)
+    out["BB_MONTHS_COUNT"] = g.size()
+    out["BB_ACCOUNT_MAX_STATUS_SEVERITY"] = g["BB_STATUS_SEVERITY"].max()
+    out["BB_ACCOUNT_ADVERSE_RATE"] = g["BB_ADVERSE_FLAG"].mean()
+    account_level = out.reset_index()
+    bureau_keys = bureau_df[["SK_ID_BUREAU", "SK_ID_CURR"]].drop_duplicates()
+    account_level = account_level.merge(
+        bureau_keys,
+        on="SK_ID_BUREAU",
+        how="inner",
+        validate="one_to_one",
+    )
+    current_level = account_level.groupby("SK_ID_CURR")
+    out = pd.DataFrame(index=current_level.size().index)
+    out["BB_MONTHS_COUNT_MEAN"] = current_level["BB_MONTHS_COUNT"].mean()
+    out["BB_MAX_STATUS_MAX"] = current_level["BB_ACCOUNT_MAX_STATUS_SEVERITY"].max()
+    out["BB_MAX_STATUS_MEAN"] = current_level["BB_ACCOUNT_MAX_STATUS_SEVERITY"].mean()
+    out["BB_ADVERSE_ACCOUNT_RATE"] = current_level["BB_ACCOUNT_ADVERSE_RATE"].apply(
+        lambda s: (s.fillna(0) > 0).mean()
+    )
+    out["BB_ADVERSE_RATE_MEAN"] = current_level["BB_ACCOUNT_ADVERSE_RATE"].mean()
+    result = out.reset_index()
+    assert_unique_key(result, "SK_ID_CURR", "bureau_balance_agg")
+    return result
+
+
 def _agg_bureau(raw_dir: str) -> pd.DataFrame:
-    bureau = pd.read_csv(os.path.join(raw_dir, "bureau.csv"))
+    bureau = pd.read_csv(
+        os.path.join(raw_dir, "bureau.csv"),
+        usecols=[
+            "SK_ID_CURR",
+            "SK_ID_BUREAU",
+            "CREDIT_ACTIVE",
+            "DAYS_CREDIT",
+            "CREDIT_DAY_OVERDUE",
+            "AMT_CREDIT_MAX_OVERDUE",
+            "CNT_CREDIT_PROLONG",
+            "AMT_CREDIT_SUM",
+            "AMT_CREDIT_SUM_DEBT",
+            "AMT_CREDIT_SUM_OVERDUE",
+        ],
+    ).copy()
     g = bureau.groupby("SK_ID_CURR")
     out = pd.DataFrame(index=g.size().index)
     out["BUREAU_LOAN_COUNT"] = g.size()
@@ -261,7 +488,38 @@ def _agg_bureau(raw_dir: str) -> pd.DataFrame:
     out["BUREAU_CREDIT_DAY_OVERDUE_MAX"] = g["CREDIT_DAY_OVERDUE"].max()
     out["BUREAU_DAYS_CREDIT_MAX"] = g["DAYS_CREDIT"].max()
     out["BUREAU_CNT_CREDIT_PROLONG_SUM"] = g["CNT_CREDIT_PROLONG"].sum()
+    out["BUREAU_ACTIVE_SHARE"] = safe_div(
+        out["BUREAU_ACTIVE_COUNT"].to_numpy(),
+        out["BUREAU_LOAN_COUNT"].to_numpy(),
+    )
+    out["BUREAU_AMT_CREDIT_MAX_OVERDUE_MAX"] = g["AMT_CREDIT_MAX_OVERDUE"].max()
+    active_credit = bureau.assign(
+        _ACTIVE_CREDIT_SUM=np.where(
+            bureau["CREDIT_ACTIVE"] == "Active",
+            bureau["AMT_CREDIT_SUM"],
+            np.nan,
+        )
+    ).groupby("SK_ID_CURR")["_ACTIVE_CREDIT_SUM"].sum(min_count=1)
+    active_debt = bureau.assign(
+        _ACTIVE_DEBT_SUM=np.where(
+            bureau["CREDIT_ACTIVE"] == "Active",
+            bureau["AMT_CREDIT_SUM_DEBT"],
+            np.nan,
+        )
+    ).groupby("SK_ID_CURR")["_ACTIVE_DEBT_SUM"].sum(min_count=1)
+    out["BUREAU_ACTIVE_DEBT_RATIO"] = safe_div(
+        active_debt.reindex(out.index).to_numpy(),
+        active_credit.reindex(out.index).to_numpy(),
+    )
+    out["BUREAU_DAYS_CREDIT_MEAN"] = g["DAYS_CREDIT"].mean()
+    out["BUREAU_DAYS_CREDIT_MIN"] = g["DAYS_CREDIT"].min()
     result = out.reset_index()
+    result = safe_left_merge_one_to_one(
+        result,
+        _agg_bureau_balance(bureau, raw_dir),
+        "SK_ID_CURR",
+        "bureau_balance_agg",
+    )
     assert_unique_key(result, "SK_ID_CURR", "bureau_agg")
     return result
 
@@ -318,6 +576,26 @@ def _agg_installments(raw_dir: str) -> pd.DataFrame:
         safe_div(inst["AMT_PAYMENT"], inst["AMT_INSTALMENT"]),
         np.nan,
     )
+    inst["INST_UNDERPAY_FLAG"] = np.where(
+        inst["INST_PAYMENT_RATIO"].notna(),
+        (inst["INST_PAYMENT_RATIO"] < 0.98).astype("int8"),
+        np.nan,
+    )
+    inst["INST_SEVERE_DPD_FLAG"] = np.where(
+        inst["INST_DPD"].notna(),
+        (inst["INST_DPD"] >= 30).astype("int8"),
+        np.nan,
+    )
+    inst["INST_RECENT_365_DPD"] = np.where(
+        inst["DAYS_INSTALMENT"] >= -365,
+        inst["INST_DPD"],
+        np.nan,
+    )
+    inst["INST_RECENT_365_PAYMENT_RATIO"] = np.where(
+        inst["DAYS_INSTALMENT"] >= -365,
+        inst["INST_PAYMENT_RATIO"],
+        np.nan,
+    )
     g = inst.groupby("SK_ID_CURR")
     out = pd.DataFrame(index=g.size().index)
     out["INST_RECORD_COUNT"] = g.size()
@@ -327,6 +605,12 @@ def _agg_installments(raw_dir: str) -> pd.DataFrame:
     out["INST_PAYMENT_RATIO_MEAN"] = g["INST_PAYMENT_RATIO"].mean()
     out["INST_PAYMENT_RATIO_MIN"] = g["INST_PAYMENT_RATIO"].min()
     out["INST_LATE_COUNT"] = g["INST_DPD"].apply(lambda s: (s > 0).sum())
+    out["INST_PAYMENT_RATIO_STD"] = g["INST_PAYMENT_RATIO"].std()
+    out["INST_UNDERPAY_RATE"] = g["INST_UNDERPAY_FLAG"].mean()
+    out["INST_SEVERE_DPD_RATE"] = g["INST_SEVERE_DPD_FLAG"].mean()
+    out["INST_RECENT_365_DPD_MEAN"] = g["INST_RECENT_365_DPD"].mean()
+    out["INST_RECENT_365_DPD_MAX"] = g["INST_RECENT_365_DPD"].max()
+    out["INST_RECENT_365_PAYMENT_RATIO_MEAN"] = g["INST_RECENT_365_PAYMENT_RATIO"].mean()
     result = out.reset_index()
     assert_unique_key(result, "SK_ID_CURR", "installments_agg")
     return result
@@ -416,12 +700,27 @@ def _select_application_frame(df: pd.DataFrame, require_sk_id_curr: bool) -> pd.
     return df[cols].copy()
 
 
-def _merge_full_aggregates(base_df: pd.DataFrame, raw_dir: str) -> pd.DataFrame:
-    merged = safe_left_merge_one_to_one(base_df, _agg_bureau(raw_dir), "SK_ID_CURR", "bureau_agg")
-    merged = safe_left_merge_one_to_one(merged, _agg_previous(raw_dir), "SK_ID_CURR", "previous_app_agg")
-    merged = safe_left_merge_one_to_one(merged, _agg_installments(raw_dir), "SK_ID_CURR", "installments_agg")
-    merged = safe_left_merge_one_to_one(merged, _agg_pos_cash(raw_dir), "SK_ID_CURR", "pos_cash_agg")
-    return safe_left_merge_one_to_one(merged, _agg_credit_card(raw_dir), "SK_ID_CURR", "credit_card_agg")
+def _merge_full_aggregates(
+    base_df: pd.DataFrame,
+    raw_dir: str,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
+) -> pd.DataFrame:
+    _, families, _ = resolve_full_feature_view(feature_view)
+    merged = base_df
+    family_frames: list[tuple[str, pd.DataFrame]] = []
+    if "BUREAU" in families:
+        family_frames.append(("bureau_agg", _agg_bureau(raw_dir)))
+    if "PREVIOUS_APPLICATION" in families:
+        family_frames.append(("previous_app_agg", _agg_previous(raw_dir)))
+    if "INSTALLMENTS" in families:
+        family_frames.append(("installments_agg", _agg_installments(raw_dir)))
+    if "POS_CASH" in families:
+        family_frames.append(("pos_cash_agg", _agg_pos_cash(raw_dir)))
+    if "CREDIT_CARD" in families:
+        family_frames.append(("credit_card_agg", _agg_credit_card(raw_dir)))
+    for feat_name, feat_df in family_frames:
+        merged = safe_left_merge_one_to_one(merged, feat_df, "SK_ID_CURR", feat_name)
+    return merged
 
 
 def _build_pre_model_frame(
@@ -429,25 +728,28 @@ def _build_pre_model_frame(
     tier: str,
     raw_dir: str | None = None,
     allow_flattened_full_input: bool = True,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> pd.DataFrame:
     tier = tier.upper()
-    has_any_aggs = any(c in df.columns for c in ALL_AGGREGATE_FEATURE_COLS)
-    has_all_aggs = all(c in df.columns for c in ALL_AGGREGATE_FEATURE_COLS)
-    if tier == "FULL" and has_any_aggs and not has_all_aggs:
-        raise ValueError("FULL input must contain either all flattened aggregate columns or none")
-    use_flat_aggs = tier == "FULL" and allow_flattened_full_input and has_all_aggs
+    selected_agg_cols: list[str] = []
+    has_any_aggs = False
+    if tier == "FULL":
+        _, _, selected_agg_cols = resolve_full_feature_view(feature_view)
+        has_any_aggs = any(c in df.columns for c in selected_agg_cols)
+    use_flat_aggs = tier == "FULL" and allow_flattened_full_input and has_any_aggs
     base = _select_application_frame(df, require_sk_id_curr=(tier == "FULL" and not use_flat_aggs))
     base = _engineer_application_features(base)
     if tier == "FULL":
         if use_flat_aggs:
+            flat_agg_cols = [c for c in selected_agg_cols if c in df.columns]
             base = pd.concat(
-                [base.reset_index(drop=True), df[ALL_AGGREGATE_FEATURE_COLS].reset_index(drop=True)],
+                [base.reset_index(drop=True), df[flat_agg_cols].reset_index(drop=True)],
                 axis=1,
             )
         else:
             if raw_dir is None:
                 raise ValueError("FULL transform requires flattened aggregate columns or raw_dir with SK_ID_CURR")
-            base = _merge_full_aggregates(base, raw_dir)
+            base = _merge_full_aggregates(base, raw_dir, feature_view=feature_view)
     if "SK_ID_CURR" in base.columns:
         base = base.drop(columns=["SK_ID_CURR"])
     fairness_cols = [c for c in FAIRNESS_ONLY_COLS if c in base.columns]
@@ -520,6 +822,11 @@ def _fit_builder_from_pre_model_frame(
     train_pre_model_df: pd.DataFrame,
     tier: str,
     aggregate_feature_cols: list[str],
+    *,
+    dataset_fingerprint: str | None = None,
+    fit_split_name: str = "train",
+    processed_manifest_fingerprint: str | None = None,
+    aggregate_contract_version: str = AGGREGATE_CONTRACT_VERSION,
 ) -> FrozenFeatureBuilder:
     train = train_pre_model_df.copy()
     categorical_cols = [c for c in CATEGORICAL_MODEL_COLS if c in train.columns]
@@ -549,26 +856,58 @@ def _fit_builder_from_pre_model_frame(
         aggregate_feature_cols_=aggregate_feature_cols,
         categorical_columns_=categorical_cols,
         scaler_=scaler,
+        fit_row_count_=int(len(train_pre_model_df)),
+        fit_split_name_=fit_split_name,
+        dataset_fingerprint_=dataset_fingerprint or dataframe_fingerprint(train_pre_model_df),
+        processed_manifest_fingerprint_=processed_manifest_fingerprint,
+        feature_engineering_version_=FEATURE_ENGINEERING_VERSION,
+        aggregate_contract_version_=aggregate_contract_version,
     )
 
 
-def fit_full_builder(train_df: pd.DataFrame, raw_dir: str = "data/raw/") -> FrozenFeatureBuilder:
+def fit_full_builder(
+    train_df: pd.DataFrame,
+    raw_dir: str = "data/raw/",
+    save_path: str | None = None,
+    processed_manifest_path: str | None = None,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
+) -> FrozenFeatureBuilder:
+    view_name, _, aggregate_feature_cols = resolve_full_feature_view(feature_view)
     builder = _fit_builder_from_pre_model_frame(
-        _build_pre_model_frame(train_df, "FULL", raw_dir=raw_dir, allow_flattened_full_input=False),
+        _build_pre_model_frame(
+            train_df,
+            "FULL",
+            raw_dir=raw_dir,
+            allow_flattened_full_input=False,
+            feature_view=view_name,
+        ),
         "FULL",
-        ALL_AGGREGATE_FEATURE_COLS,
+        aggregate_feature_cols,
+        dataset_fingerprint=dataframe_fingerprint(train_df),
+        fit_split_name="train",
+        processed_manifest_fingerprint=_load_processed_manifest_fingerprint(processed_manifest_path),
+        aggregate_contract_version=_aggregate_contract_version_for_view(view_name, aggregate_feature_cols),
     )
-    builder.save(FULL_FEATURE_BUILDER_ARTIFACT_PATH)
+    if save_path is not None:
+        builder.save(save_path)
     return builder
 
 
-def fit_reduced_builder(train_df: pd.DataFrame) -> FrozenFeatureBuilder:
+def fit_reduced_builder(
+    train_df: pd.DataFrame,
+    save_path: str | None = None,
+    processed_manifest_path: str | None = None,
+) -> FrozenFeatureBuilder:
     builder = _fit_builder_from_pre_model_frame(
         _build_pre_model_frame(train_df, "REDUCED", raw_dir=None, allow_flattened_full_input=False),
         "REDUCED",
         [],
+        dataset_fingerprint=dataframe_fingerprint(train_df),
+        fit_split_name="train",
+        processed_manifest_fingerprint=_load_processed_manifest_fingerprint(processed_manifest_path),
     )
-    builder.save(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH)
+    if save_path is not None:
+        builder.save(save_path)
     return builder
 
 
@@ -607,9 +946,20 @@ def _transform_with_builder(
     builder: FrozenFeatureBuilder,
     for_linear_model: bool = False,
     raw_dir: str | None = None,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> pd.DataFrame:
-    pre_model = _build_pre_model_frame(df, builder.tier, raw_dir=raw_dir, allow_flattened_full_input=True)
+    pre_model = _build_pre_model_frame(
+        df,
+        builder.tier,
+        raw_dir=raw_dir,
+        allow_flattened_full_input=True,
+        feature_view=feature_view,
+    )
     pre_model = _align_pre_model_frame(pre_model, builder.pre_model_columns_)
+    if builder.tier == "FULL" and raw_dir is None:
+        for col, value in builder.numeric_imputers_.items():
+            if col in pre_model.columns and pre_model[col].isna().all():
+                pre_model[col] = value
     pre_model = _apply_rare_category_maps(
         pre_model,
         builder.categorical_columns_,
@@ -630,9 +980,10 @@ def build_full(
     builder: FrozenFeatureBuilder,
     for_linear_model: bool = False,
     raw_dir: str | None = None,
+    feature_view: str = DEFAULT_FULL_FEATURE_VIEW,
 ) -> pd.DataFrame:
     _validate_builder(builder, "FULL")
-    return _transform_with_builder(df, builder, for_linear_model, raw_dir)
+    return _transform_with_builder(df, builder, for_linear_model, raw_dir, feature_view)
 
 
 def build_reduced(
@@ -768,12 +1119,20 @@ if __name__ == "__main__":
         print("BLOCKED: Stage 4 final acceptance requires data/processed/train.pkl from Module 1")
     else:
         train_df = pd.read_pickle(train_path)
-        reduced_builder = fit_reduced_builder(train_df)
-        full_builder = fit_full_builder(train_df, raw_dir="data/raw/")
+        reduced_builder = fit_reduced_builder(train_df, save_path=REDUCED_FEATURE_BUILDER_ARTIFACT_PATH)
+        full_builder = fit_full_builder(train_df, raw_dir="data/raw/", save_path=FULL_FEATURE_BUILDER_ARTIFACT_PATH)
         assert os.path.exists(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH)
         assert os.path.exists(FULL_FEATURE_BUILDER_ARTIFACT_PATH)
-        assert isinstance(joblib.load(REDUCED_FEATURE_BUILDER_ARTIFACT_PATH), FrozenFeatureBuilder)
-        assert isinstance(joblib.load(FULL_FEATURE_BUILDER_ARTIFACT_PATH), FrozenFeatureBuilder)
+        assert os.path.exists(REDUCED_FEATURE_BUILDER_MANIFEST_PATH)
+        assert os.path.exists(FULL_FEATURE_BUILDER_MANIFEST_PATH)
+        from src.builder_artifacts import load_validated_builders
+        loaded_builders = load_validated_builders(
+            artifact_dir="artifacts",
+            processed_dir=os.environ.get("DATA_PROCESSED_DIR", "data/processed/"),
+            strict_artifacts=False,
+        )
+        assert isinstance(loaded_builders["REDUCED"], FrozenFeatureBuilder)
+        assert isinstance(loaded_builders["FULL"], FrozenFeatureBuilder)
         print("  fit builders persisted and reloaded ... PASSED")
         missing_splits = [n for n in ["val_model", "val_policy", "test"] if not os.path.exists(_processed_split_path(n))]
         if missing_splits:

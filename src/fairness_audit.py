@@ -43,20 +43,29 @@ def _load_or_fit_full_builder(
     train_raw: pd.DataFrame,
     raw_dir: str = "data/raw/",
     builder_path: str = "artifacts/full_feature_builder.joblib",
+    processed_dir: str = "data/processed/",
+    strict_artifacts: bool = False,
 ):
     """Boundary shim for the Module 2 FrozenFeatureBuilder contract."""
+    from src.builder_artifacts import load_builder
     from src.feature_engineering import FrozenFeatureBuilder, fit_full_builder
 
     if os.path.exists(builder_path):
-        builder = joblib.load(builder_path)
+        artifact_dir = os.path.dirname(builder_path) or "."
+        builder = load_builder(
+            tier="FULL",
+            artifact_dir=artifact_dir,
+            processed_dir=processed_dir,
+            strict_artifacts=strict_artifacts,
+        )
         if not isinstance(builder, FrozenFeatureBuilder):
             raise TypeError(
                 "full_feature_builder.joblib must contain a FrozenFeatureBuilder"
             )
         return builder
 
-    builder = fit_full_builder(train_raw, raw_dir=raw_dir)
-    if builder_path != "artifacts/full_feature_builder.joblib":
+    builder = fit_full_builder(train_raw, raw_dir=raw_dir, save_path=None)
+    if builder_path:
         builder.save(builder_path)
     return builder
 
@@ -70,10 +79,10 @@ def derive_fairness_groups(
     train_income_q1: float,
     train_income_q2: float,
 ) -> pd.DataFrame:
-    """Add 8 fairness group columns using train-fitted income quantiles."""
+    """Add support-stable proxy fairness groups using train-fitted quantiles."""
     df = df.copy()
 
-    # Step A — INCOME_TERTILE
+    # Step A ? INCOME_TERTILE
     def _income_tertile(x: float) -> str:
         if pd.isna(x):
             return "MISSING"
@@ -85,31 +94,32 @@ def derive_fairness_groups(
 
     df["INCOME_TERTILE"] = df["AMT_INCOME_TOTAL"].apply(_income_tertile)
 
-    # Step B — FAIR_GROUP_PRIMARY
+    # Step B ? FAIR_GROUP_PRIMARY
+    # Region-only family: keeps the geographic proxy lens but removes the
+    # prior income-region cross-product fragmentation/confounding.
     df["FAIR_GROUP_PRIMARY"] = (
-        df["INCOME_TERTILE"].astype(str)
-        + "__"
+        "REGION_"
         + df["REGION_RATING_CLIENT_W_CITY"].fillna(-1).astype(int).astype(str)
     )
 
-    # Step C — INCOME_TYPE_POOLED
+    # Step C ? INCOME_TYPE_POOLED
     from src.feature_engineering import pool_rare_categories
 
     df["INCOME_TYPE_POOLED"] = pool_rare_categories(
         df["NAME_INCOME_TYPE"], min_count=500
     ).fillna("MISSING")
 
-    # Step D — HOUSING_TYPE_POOLED
+    # Step D ? HOUSING_TYPE_POOLED
     df["HOUSING_TYPE_POOLED"] = pool_rare_categories(
         df["NAME_HOUSING_TYPE"], min_count=500
     ).fillna("MISSING")
 
-    # Step E — FAIR_GROUP_SECONDARY
-    df["FAIR_GROUP_SECONDARY"] = (
-        df["INCOME_TYPE_POOLED"] + "__" + df["HOUSING_TYPE_POOLED"]
-    )
+    # Step E ? FAIR_GROUP_SECONDARY
+    # Income-tertile family: provides a cleaner socioeconomic calibration
+    # lens than the prior income-type x housing cross-product.
+    df["FAIR_GROUP_SECONDARY"] = "INCOME_" + df["INCOME_TERTILE"].astype(str)
 
-    # Step F — CHILDREN_BIN
+    # Step F ? CHILDREN_BIN
     df["CHILDREN_BIN"] = pd.cut(
         df["CNT_CHILDREN"].fillna(0),
         bins=[-1, 0, 1, np.inf],
@@ -117,12 +127,12 @@ def derive_fairness_groups(
     )
     df["CHILDREN_BIN"] = df["CHILDREN_BIN"].astype(str)
 
-    # Step G — OWN_ASSET_BIN
+    # Step G ? OWN_ASSET_BIN
     df["OWN_ASSET_BIN"] = (
         df["FLAG_OWN_CAR"].fillna("N") + "_" + df["FLAG_OWN_REALTY"].fillna("N")
     )
 
-    # Step H — FAIR_GROUP_TERTIARY
+    # Step H ? FAIR_GROUP_TERTIARY
     df["FAIR_GROUP_TERTIARY"] = (
         df["OWN_ASSET_BIN"] + "__" + df["CHILDREN_BIN"]
     )
@@ -181,9 +191,9 @@ def compute_fairness_metrics(
                 "eod": np.nan,
                 "brier_ratio": np.nan,
                 "evaluable": False,
-                "di_pass": np.nan,
-                "eod_pass": np.nan,
-                "brier_pass": np.nan,
+                "di_pass": None,
+                "eod_pass": None,
+                "brier_pass": None,
             })
             continue
 
@@ -205,9 +215,9 @@ def compute_fairness_metrics(
             "eod": np.nan,
             "brier_ratio": np.nan,
             "evaluable": True,
-            "di_pass": np.nan,
-            "eod_pass": np.nan,
-            "brier_pass": np.nan,
+            "di_pass": None,
+            "eod_pass": None,
+            "brier_pass": None,
         })
 
     result = pd.DataFrame(rows)
@@ -409,7 +419,9 @@ def main() -> None:
         full_builder = _load_or_fit_full_builder(
             train_raw,
             raw_dir="data/raw/",
-            builder_path="artifacts/full_feature_builder.joblib",
+            builder_path=os.path.join(ARTIFACT_DIR, "full_feature_builder.joblib"),
+            processed_dir="data/processed/",
+            strict_artifacts=True,
         )
 
         X_test_full = build_full(test_raw, full_builder, raw_dir="data/raw/")
@@ -571,7 +583,8 @@ if __name__ == "__main__":
         assert col in result.columns, f"Missing column: {col}"
 
     assert set(result["INCOME_TERTILE"].unique()).issubset({"T1", "T2", "T3", "MISSING"})
-    assert result["FAIR_GROUP_PRIMARY"].str.contains("__").all()
+    assert result["FAIR_GROUP_PRIMARY"].str.startswith("REGION_").all()
+    assert result["FAIR_GROUP_SECONDARY"].str.startswith("INCOME_").all()
     assert result["CHILDREN_BIN"].isin(["0", "1", "2_PLUS"]).all()
     print("  derive_fairness_groups ......... PASSED")
 
