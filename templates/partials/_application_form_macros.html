@@ -1,0 +1,106 @@
+{% macro render_field(section_name, field, sample_value=None, optional=False) -%}
+    {% set field_id = section_name ~ '__' ~ field.name %}
+    {% set is_days_field = field.name.startswith('DAYS_') and field.name != 'DAYS_EMPLOYED_ANOM' %}
+    {% set label_text = field.name %}
+    {% set display_value = (-sample_value) if is_days_field and sample_value is number and sample_value < 0 else sample_value %}
+    <div class="input-field portal-input-field">
+        <label for="{{ field_id }}">
+            <span>{{ label_text }}</span>
+            <span class="field-badge {{ 'optional' if optional else 'required' }}">{{ "Optional" if optional else "Required" }}</span>
+        </label>
+
+        {% if field.kind == "select" %}
+        <select
+            id="{{ field_id }}"
+            name="{{ field.name }}"
+            data-portal-field
+            data-section="{{ section_name }}"
+            data-type="text"
+            data-required="{{ 'false' if optional else 'true' }}"
+            data-field-path="{{ section_name }}.{{ field.name }}"
+            data-original-value="{{ display_value if display_value is not none else '' }}"
+        >
+            <option value="">Select</option>
+            {% for option in field.options %}
+            <option value="{{ option }}" {% if sample_value == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+        </select>
+        {% else %}
+        <input
+            id="{{ field_id }}"
+            name="{{ field.name }}"
+            data-portal-field
+            data-section="{{ section_name }}"
+            data-type="number"
+            data-required="{{ 'false' if optional else 'true' }}"
+            data-field-path="{{ section_name }}.{{ field.name }}"
+            data-original-value="{{ display_value if display_value is not none else '' }}"
+            {% if is_days_field %}data-negate="true"{% endif %}
+            type="number"
+            step="any"
+            {% if display_value is not none %}value="{{ display_value }}"{% endif %}
+            placeholder="{{ display_value if display_value is not none else '' }}"
+        >
+        {% endif %}
+
+        {% if is_days_field %}
+        <p class="field-hint">Enter as a positive number of days. The saved payload will preserve the model's negative-day convention.</p>
+        {% elif optional %}
+        <p class="field-hint">If left blank, this field will be saved as <code>0</code> in the FULL payload.</p>
+        {% endif %}
+    </div>
+{%- endmacro %}
+
+
+{% macro render_section(section, sample_payload, optional=False, accordion=False, completion_id=None) -%}
+    {% set section_name = section.name %}
+    {% set section_payload = sample_payload.get(section_name, {}) if sample_payload else {} %}
+    {% if accordion %}
+    <div class="accordion-item portal-accordion-item">
+        <h2 class="accordion-header" id="heading-{{ section_name }}">
+            <button
+                class="accordion-button collapsed"
+                type="button"
+                data-bs-toggle="collapse"
+                data-bs-target="#collapse-{{ section_name }}"
+                aria-expanded="false"
+                aria-controls="collapse-{{ section_name }}"
+            >
+                <span>{{ section.label }}</span>
+                <span class="portal-section-inline-hint" id="{{ completion_id }}">{{ section.fields | length }} optional fields</span>
+            </button>
+        </h2>
+        <div
+            id="collapse-{{ section_name }}"
+            class="accordion-collapse collapse"
+            aria-labelledby="heading-{{ section_name }}"
+            data-bs-parent="#portal-full-accordion"
+        >
+            <div class="accordion-body">
+                <div class="form-grid">
+                    {% for field in section.fields %}
+                    {{ render_field(section_name, field, section_payload.get(field.name), optional=optional) }}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <section class="portal-section-card" data-portal-section-card="{{ section_name }}">
+        <div class="portal-section-header">
+            <div>
+                <p class="eyebrow">{{ section.label }}</p>
+                <h2>{{ section.label }}</h2>
+            </div>
+            {% if completion_id %}
+            <span class="portal-section-completion" id="{{ completion_id }}"></span>
+            {% endif %}
+        </div>
+        <div class="form-grid">
+            {% for field in section.fields %}
+            {{ render_field(section_name, field, section_payload.get(field.name), optional=optional) }}
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+{%- endmacro %}

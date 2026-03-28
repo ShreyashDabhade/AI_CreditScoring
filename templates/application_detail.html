@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">Applicant View</p>
+        <h1>Application #{{ application.id }}</h1>
+        <p class="page-intro">Saved application record with the latest persisted model summary.</p>
+    </div>
+</section>
+
+<section class="section section-base">
+    <div class="section-shell">
+        {% if request.args.get('created') %}
+        <div class="alert alert-success" role="alert">
+            Application saved successfully. It is now available in the analyst review queue.
+        </div>
+        {% endif %}
+
+        <div class="status-panel">
+            <div class="status-row"><span class="status-label">Applicant</span><span class="status-value">{{ application.applicant_name }}</span></div>
+            <div class="status-row"><span class="status-label">SK_ID_CURR</span><span class="status-value">{{ application.sk_id_curr or "Not assigned" }}</span></div>
+            <div class="status-row"><span class="status-label">Tier</span><span class="status-value">{{ application.tier_type }}</span></div>
+            <div class="status-row"><span class="status-label">Status</span><span class="status-value">{{ application.current_status }}</span></div>
+            <div class="status-row"><span class="status-label">Last Decision</span><span class="status-value">{{ application.last_decision or "Not analyzed yet" }}</span></div>
+            <div class="status-row"><span class="status-label">Model Version</span><span class="status-value monospace">{{ application.last_model_version or "-" }}</span></div>
+            <div class="status-row"><span class="status-label">Health Model</span><span class="status-value monospace">{{ health_snapshot.model_version }}</span></div>
+        </div>
+
+        <div class="form-panel mt-4">
+            <h2 class="mb-3">Saved Payload</h2>
+            <pre class="bg-light text-dark p-3 rounded">{{ application.application_payload_pretty }}</pre>
+        </div>
+
+        <div class="form-panel mt-4">
+            <h2 class="mb-3">Score History</h2>
+            {% if score_history %}
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Scored At</th>
+                            <th>Probability</th>
+                            <th>Decision</th>
+                            <th>Model Version</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for run in score_history %}
+                        <tr>
+                            <td>{{ run.scored_at }}</td>
+                            <td>{{ run.probability if run.probability is not none else "-" }}</td>
+                            <td>{{ run.decision or "-" }}</td>
+                            <td class="monospace">{{ run.model_version or "-" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p>No score runs have been stored yet.</p>
+            {% endif %}
+        </div>
+    </div>
+</section>
+{% endblock %}

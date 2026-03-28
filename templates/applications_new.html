@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% from "partials/_application_form_macros.html" import render_section %}
+
+{% block content %}
+{% set sections = ui_config.sections or [] %}
+{% set reduced_sample = ui_config.samplePayloads.REDUCED if ui_config.samplePayloads is defined else {} %}
+{% set full_sample = ui_config.samplePayloads.FULL if ui_config.samplePayloads is defined else {} %}
+
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">Intelligent Application Portal</p>
+        <h1>Create a saved application</h1>
+        <p class="page-intro">Capture a clean REDUCED or FULL application, validate it in real time, and persist it for analyst review without triggering immediate scoring.</p>
+    </div>
+</section>
+
+<section class="section section-base">
+    <div class="section-shell">
+        <div class="portal-layout">
+            <div class="portal-main">
+                <div class="form-panel">
+                    {% if error_message %}
+                    <div class="alert alert-danger" role="alert">{{ error_message }}</div>
+                    {% endif %}
+
+                    <form method="post" action="{{ url_for('application_create') }}" id="application-portal-form" novalidate>
+                        <input type="hidden" name="tier_type" id="portal-tier-input" value="REDUCED">
+                        <input type="hidden" name="current_status" value="SUBMITTED">
+                        <textarea name="application_payload_json" id="application_payload_json" class="is-hidden"></textarea>
+
+                        <section class="portal-section-card portal-intake-card">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">Applicant Intake</p>
+                                    <h2>Borrower record</h2>
+                                </div>
+                                <span class="portal-section-completion" id="portal-intake-completion">2 required fields</span>
+                            </div>
+
+                            <div class="form-grid">
+                                <div class="input-field portal-input-field">
+                                    <label for="applicant_name">
+                                        <span>Applicant Name</span>
+                                        <span class="field-badge required">Required</span>
+                                    </label>
+                                    <input id="applicant_name" name="applicant_name" type="text" data-portal-meta-required="true" required>
+                                </div>
+
+                                <div class="input-field portal-input-field">
+                                    <label for="sk_id_curr">
+                                        <span>SK_ID_CURR</span>
+                                        <span class="field-badge optional">Optional</span>
+                                    </label>
+                                    <div class="portal-inline-control">
+                                        <input id="sk_id_curr" name="sk_id_curr" type="number" step="1" placeholder="Optional applicant reference">
+                                        <button type="button" class="button button-ghost portal-inline-button" id="generate-sk-id">Generate</button>
+                                    </div>
+                                    <p class="field-hint">You can leave this blank or generate a local reference before saving.</p>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="portal-section-card">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">Coverage Tier</p>
+                                    <h2>Choose scoring depth</h2>
+                                </div>
+                                <span class="portal-section-completion" id="portal-tier-hint">REDUCED is selected by default</span>
+                            </div>
+
+                            <div class="tier-selector portal-tier-selector" role="tablist" aria-label="Coverage tier">
+                                <button type="button" class="tier-toggle active" data-portal-tier-toggle data-tier="REDUCED" aria-selected="true">REDUCED</button>
+                                <button type="button" class="tier-toggle" data-portal-tier-toggle data-tier="FULL" aria-selected="false">FULL</button>
+                            </div>
+                            <p class="tier-description" id="portal-tier-description">Application-only intake. Best for fast submission when aggregate credit history is unavailable.</p>
+                        </section>
+
+                        {% if sections %}
+                        {{ render_section(sections[0], reduced_sample, optional=False, completion_id="portal-application-completion") }}
+                        {% endif %}
+
+                        <section class="portal-section-card portal-full-panel is-hidden" id="portal-full-panel">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">FULL Tier Aggregates</p>
+                                    <h2>Additional credit history context</h2>
+                                </div>
+                                <span class="portal-section-completion" id="portal-full-summary">Optional sections hidden</span>
+                            </div>
+                            <p class="page-intro portal-inline-copy">Blank aggregate fields are not discarded. They are saved explicitly as <code>0</code> in the FULL payload so analysts can see what was omitted.</p>
+
+                            <div class="accordion portal-accordion" id="portal-full-accordion">
+                                {% for section in sections[1:] %}
+                                {{ render_section(section, full_sample, optional=True, accordion=True, completion_id="completion-" ~ section.name) }}
+                                {% endfor %}
+                            </div>
+                        </section>
+
+                        <section class="portal-section-card">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">Submission Readiness</p>
+                                    <h2>Portal checks</h2>
+                                </div>
+                                <span class="portal-section-completion" id="portal-readiness-pill">Awaiting validation</span>
+                            </div>
+
+                            <div class="portal-readiness-grid">
+                                <div class="portal-readiness-item">
+                                    <span class="portal-readiness-label">Applicant Record</span>
+                                    <span class="portal-readiness-value" id="portal-meta-status">Incomplete</span>
+                                </div>
+                                <div class="portal-readiness-item">
+                                    <span class="portal-readiness-label">Application Fields</span>
+                                    <span class="portal-readiness-value" id="portal-application-status">Incomplete</span>
+                                </div>
+                                <div class="portal-readiness-item">
+                                    <span class="portal-readiness-label">FULL Aggregate Defaults</span>
+                                    <span class="portal-readiness-value" id="portal-defaults-status">Not active</span>
+                                </div>
+                            </div>
+
+                            <p class="analysis-feedback portal-feedback" id="portal-feedback" aria-live="polite"></p>
+                        </section>
+
+                        <div class="analysis-action portal-submit-row">
+                            <button type="submit" class="button button-primary button-large">Save Application</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <aside class="portal-sidecar">
+                <div class="feature-block portal-sidecar-card">
+                    <h3>Submission path</h3>
+                    <p>This portal saves the application first. Analysts can review and analyze it later from the command center.</p>
+                </div>
+                <div class="feature-block portal-sidecar-card">
+                    <h3>Current runtime</h3>
+                    <p class="monospace">{{ health_snapshot.model_version }}</p>
+                    <p>Fairness audit: {{ "Passed" if health_snapshot.fairness_audit_passed else "Not passed" }}</p>
+                </div>
+                <div class="feature-block portal-sidecar-card">
+                    <h3>Tier guidance</h3>
+                    <p>REDUCED requires the application section only. FULL adds bureau, previous applications, installments, POS cash, and credit card aggregates.</p>
+                </div>
+            </aside>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('ui_static', filename='application_portal.js') }}"></script>
+{% endblock %}

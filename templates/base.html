@@ -11,56 +11,110 @@
     <link rel="stylesheet" href="{{ url_for('ui_static', filename='style.css') }}">
 </head>
 <body data-page="{{ active_nav }}">
-    <nav class="site-nav" data-site-nav>
-        <div class="nav-shell">
-            <a href="{{ url_for('home') }}" class="brand" aria-label="MasterMind AI home">
-                <span class="brand-mark">M</span>
-                <span class="brand-wordmark">MasterMind AI</span>
-            </a>
+    <div class="app-shell">
+        <aside class="command-sidebar" data-site-nav>
+            <div class="sidebar-surface">
+                <a href="{{ url_for('home') }}" class="brand" aria-label="MasterMind AI home">
+                    <span class="brand-mark">M</span>
+                    <span class="brand-lockup">
+                        <span class="brand-wordmark">MasterMind AI</span>
+                        <span class="brand-subtitle">Analyst Command Center</span>
+                    </span>
+                </a>
 
-            <div class="nav-actions">
-                <div class="nav-links" aria-label="Primary">
-                    <a class="nav-link{% if active_nav == 'home' %} active{% endif %}" href="{{ url_for('home') }}">Home</a>
-                    <a class="nav-link{% if active_nav == 'analyze' %} active{% endif %}" href="{{ url_for('analyze') }}">Analyse</a>
-                    <a class="nav-link{% if active_nav == 'status' %} active{% endif %}" href="{{ url_for('status_page') }}">System Status</a>
-                    <a class="nav-link{% if active_nav == 'analytics' %} active{% endif %}" href="{{ url_for('analytics') }}">Analytics</a>
+                <div class="sidebar-section">
+                    <p class="sidebar-label">Navigation</p>
+                    <nav class="sidebar-nav" aria-label="Primary">
+                        <a class="sidebar-link{% if active_nav == 'home' %} active{% endif %}" href="{{ url_for('home') }}">
+                            <span class="sidebar-link-title">Home</span>
+                            <span class="sidebar-link-meta">Overview and platform context</span>
+                        </a>
+                        <a class="sidebar-link{% if active_nav == 'applications' %} active{% endif %}" href="{{ url_for('application_new') }}">
+                            <span class="sidebar-link-title">New Application</span>
+                            <span class="sidebar-link-meta">Save a score-ready applicant payload</span>
+                        </a>
+                        <a class="sidebar-link{% if active_nav == 'analyst' %} active{% endif %}" href="{{ url_for('analyst_dashboard') }}">
+                            <span class="sidebar-link-title">Analyst Hub</span>
+                            <span class="sidebar-link-meta">Review queue and decision workflow</span>
+                        </a>
+                        <a class="sidebar-link{% if active_nav == 'status' %} active{% endif %}" href="{{ url_for('status_page') }}">
+                            <span class="sidebar-link-title">System Status</span>
+                            <span class="sidebar-link-meta">Runtime health and model posture</span>
+                        </a>
+                        <a class="sidebar-link{% if active_nav == 'analytics' %} active{% endif %}" href="{{ url_for('analytics') }}">
+                            <span class="sidebar-link-title">Analytics</span>
+                            <span class="sidebar-link-meta">Offline artifact dashboards</span>
+                        </a>
+                    </nav>
                 </div>
-                <a class="button button-primary nav-cta" href="{{ url_for('analyze') }}">Run Analysis</a>
-            </div>
-        </div>
-    </nav>
 
-    <main class="page-main">
-        {% block content %}{% endblock %}
-    </main>
+                <div class="sidebar-section sidebar-secondary">
+                    <p class="sidebar-label">Scoring</p>
+                    <a class="button button-primary sidebar-cta" href="{{ url_for('analyze') }}">Run Analysis</a>
+                    <p class="sidebar-footnote">Existing `/analyze` and `/score` flows remain available inside the new shell.</p>
+                </div>
+            </div>
+        </aside>
 
-    <footer class="site-footer">
-        <div class="section-shell footer-grid">
-            <div>
-                <p class="footer-heading">Product</p>
-                <a class="footer-link" href="{{ url_for('home') }}">Home</a>
-                <a class="footer-link" href="{{ url_for('analyze') }}">Credit Analysis</a>
-                <a class="footer-link" href="{{ url_for('status_page') }}">System Status</a>
-                <a class="footer-link" href="{{ url_for('analytics') }}">Analytics</a>
-            </div>
-            <div>
-                <p class="footer-heading">API</p>
-                <a class="footer-link" href="{{ url_for('status_page') }}#api-reference">GET /health</a>
-                <a class="footer-link" href="{{ url_for('analyze') }}">POST /score</a>
-                <a class="footer-link" href="{{ url_for('home') }}#coverage-tiers">Coverage Tiers</a>
-            </div>
-            <div>
-                <p class="footer-heading">Model</p>
-                <a class="footer-link" href="{{ url_for('home') }}#features">SHAP Explainability</a>
-                <a class="footer-link" href="{{ url_for('status_page') }}">Fairness Audit</a>
-                <a class="footer-link" href="{{ url_for('home') }}#about">Calibration</a>
-            </div>
+        <div class="workspace">
+            <header class="utility-bar">
+                <div class="utility-headline">
+                    <p class="eyebrow utility-eyebrow">Live Runtime</p>
+                    <h1 class="utility-title">{{ page_title }}</h1>
+                </div>
+
+                <div class="utility-metrics">
+                    <div class="utility-card">
+                        <span class="utility-label">Model Version</span>
+                        <span class="utility-value monospace">{{ health_snapshot.model_version }}</span>
+                    </div>
+                    <div class="utility-card">
+                        <span class="utility-label">Fairness Audit</span>
+                        <span class="utility-value">
+                            <span class="decision-badge {% if health_snapshot.fairness_audit_passed %}approve{% else %}decline{% endif %}">
+                                {{ "Passed" if health_snapshot.fairness_audit_passed else "Not passed" }}
+                            </span>
+                        </span>
+                    </div>
+                    <div class="utility-card">
+                        <span class="utility-label">Coverage Tiers</span>
+                        <span class="utility-value">{{ health_snapshot.coverage_tiers_available | join(", ") }}</span>
+                    </div>
+                </div>
+            </header>
+
+            <main class="page-main">
+                {% block content %}{% endblock %}
+            </main>
+
+            <footer class="site-footer">
+                <div class="section-shell footer-grid">
+                    <div>
+                        <p class="footer-heading">Workspace</p>
+                        <a class="footer-link" href="{{ url_for('home') }}">Home</a>
+                        <a class="footer-link" href="{{ url_for('application_new') }}">New Application</a>
+                        <a class="footer-link" href="{{ url_for('analyst_dashboard') }}">Analyst Hub</a>
+                    </div>
+                    <div>
+                        <p class="footer-heading">Operations</p>
+                        <a class="footer-link" href="{{ url_for('analyze') }}">Credit Analysis</a>
+                        <a class="footer-link" href="{{ url_for('status_page') }}#api-reference">GET /health</a>
+                        <a class="footer-link" href="{{ url_for('analyze') }}">POST /score</a>
+                    </div>
+                    <div>
+                        <p class="footer-heading">Oversight</p>
+                        <a class="footer-link" href="{{ url_for('analytics') }}">Analytics</a>
+                        <a class="footer-link" href="{{ url_for('status_page') }}">System Status</a>
+                        <a class="footer-link" href="{{ url_for('home') }}#about">Calibration</a>
+                    </div>
+                </div>
+                <div class="section-shell footer-bottom">
+                    <p>MasterMind AI analyst shell for explainable credit decisions.</p>
+                    <p>fairness_v2026Q1</p>
+                </div>
+            </footer>
         </div>
-        <div class="section-shell footer-bottom">
-            <p>MasterMind AI - Explainable credit decisions, built with fairness.</p>
-            <p>fairness_v2026Q1</p>
-        </div>
-    </footer>
+    </div>
 
     <script>
         window.__MASTERMIND_UI__ = {{ ui_config | tojson }};

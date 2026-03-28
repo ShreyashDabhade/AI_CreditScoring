@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">Analyst Command Center</p>
+        <h1>Risk operations dashboard</h1>
+        <p class="page-intro">Search the saved application queue, select a record, and move from triage into review, edit, or analysis without leaving the Flask workflow.</p>
+        <div class="helper-chip-row">
+            <span class="helper-chip">SQLite-backed queue</span>
+            <span class="helper-chip">Persistent review workflow</span>
+            <span class="helper-chip">Live runtime health visible</span>
+        </div>
+    </div>
+</section>
+
+<section class="section section-base">
+    <div class="section-shell">
+        <div class="analyst-kpi-grid">
+            <article class="analyst-kpi-card">
+                <span class="analyst-kpi-label">Total Applications</span>
+                <strong class="analyst-kpi-value">{{ dashboard_stats.total }}</strong>
+                <p class="analyst-kpi-meta">Records currently stored in SQLite.</p>
+            </article>
+            <article class="analyst-kpi-card">
+                <span class="analyst-kpi-label">Review Queue</span>
+                <strong class="analyst-kpi-value">{{ dashboard_stats.review_queue }}</strong>
+                <p class="analyst-kpi-meta">Submitted, ready, or manual-review cases.</p>
+            </article>
+            <article class="analyst-kpi-card">
+                <span class="analyst-kpi-label">Analyzed</span>
+                <strong class="analyst-kpi-value">{{ dashboard_stats.analyzed }}</strong>
+                <p class="analyst-kpi-meta">Applications with at least one persisted score run.</p>
+            </article>
+            <article class="analyst-kpi-card">
+                <span class="analyst-kpi-label">Average PD</span>
+                <strong class="analyst-kpi-value">{{ "%.1f%%"|format(dashboard_stats.avg_probability * 100) if dashboard_stats.avg_probability is not none else "--" }}</strong>
+                <p class="analyst-kpi-meta">Across rows with a saved probability.</p>
+            </article>
+        </div>
+
+        <div class="analyst-dashboard-grid" id="analyst-dashboard-root">
+            <div class="analyst-master-panel">
+                <div class="analyst-panel-header">
+                    <div>
+                        <p class="eyebrow">Application Queue</p>
+                        <h2>Master list</h2>
+                    </div>
+                    <a class="button button-ghost" href="{{ url_for('application_new') }}">New Application</a>
+                </div>
+
+                <div class="analyst-toolbar">
+                    <div class="input-field analyst-search-field">
+                        <label for="analyst-search">Search</label>
+                        <input id="analyst-search" type="search" placeholder="Search by applicant name, SK_ID_CURR, tier, or status">
+                    </div>
+                    <div class="input-field analyst-sort-field">
+                        <label for="analyst-sort">Sort</label>
+                        <select id="analyst-sort">
+                            <option value="date_desc">Newest first</option>
+                            <option value="date_asc">Oldest first</option>
+                            <option value="name_asc">Applicant A-Z</option>
+                            <option value="prob_desc">Highest probability</option>
+                            <option value="prob_asc">Lowest probability</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="analyst-filter-row" id="analyst-status-filters">
+                    <button type="button" class="analyst-filter-chip active" data-status-filter="ALL">All</button>
+                    <button type="button" class="analyst-filter-chip" data-status-filter="SUBMITTED">Submitted</button>
+                    <button type="button" class="analyst-filter-chip" data-status-filter="READY_FOR_REVIEW">Ready for Review</button>
+                    <button type="button" class="analyst-filter-chip" data-status-filter="ANALYZED">Analyzed</button>
+                    <button type="button" class="analyst-filter-chip" data-status-filter="APPROVED">Approved</button>
+                    <button type="button" class="analyst-filter-chip" data-status-filter="REVIEW">Review</button>
+                    <button type="button" class="analyst-filter-chip" data-status-filter="DECLINED">Declined</button>
+                </div>
+
+                <div class="analyst-loading-state" id="analyst-loading-state">
+                    <div class="analyst-loading-bar"></div>
+                    <div class="analyst-loading-bar short"></div>
+                    <div class="analyst-loading-bar"></div>
+                </div>
+
+                {% if applications %}
+                <div class="table-responsive analyst-table-wrap">
+                    <table class="table analyst-table" id="analyst-applications-table">
+                        <thead>
+                            <tr>
+                                <th>SK_ID_CURR</th>
+                                <th>Applicant Name</th>
+                                <th>Date</th>
+                                <th>Tier Type</th>
+                                <th>Current Status</th>
+                                <th>Last Decision</th>
+                                <th>Last Probability</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for application in applications %}
+                            <tr
+                                class="analyst-table-row{% if selected_application and selected_application.id == application.id %} selected{% endif %}"
+                                data-application-id="{{ application.id }}"
+                                data-sk-id="{{ application.sk_id_curr or '' }}"
+                                data-applicant-name="{{ application.applicant_name }}"
+                                data-submitted-at="{{ application.submitted_at }}"
+                                data-updated-at="{{ application.updated_at }}"
+                                data-tier="{{ application.tier_type }}"
+                                data-status="{{ application.current_status }}"
+                                data-last-decision="{{ application.last_decision or '' }}"
+                                data-last-probability="{{ application.last_probability if application.last_probability is not none else '' }}"
+                                data-model-version="{{ application.last_model_version or '' }}"
+                            >
+                                <td>{{ application.sk_id_curr or "—" }}</td>
+                                <td>
+                                    <button type="button" class="analyst-row-select" data-row-select="{{ application.id }}">
+                                        {{ application.applicant_name }}
+                                    </button>
+                                </td>
+                                <td>{{ application.submitted_at }}</td>
+                                <td>{{ application.tier_type }}</td>
+                                <td><span class="analyst-status-badge {{ application.status_badge_class }}">{{ application.status_label }}</span></td>
+                                <td>
+                                    {% if application.last_decision %}
+                                    <span class="decision-badge {{ application.decision_badge_class }}">{{ application.decision_label }}</span>
+                                    {% else %}
+                                    —
+                                    {% endif %}
+                                </td>
+                                <td>{{ application.last_probability_text }}</td>
+                                <td>
+                                    <div class="analyst-action-stack">
+                                        <a class="button button-ghost analyst-mini-action" href="{{ url_for('analyst_application_detail', application_id=application.id) }}" data-credit-brief-open="{{ application.id }}">View</a>
+                                        <a class="button button-ghost analyst-mini-action" href="{{ url_for('analyst_application_detail', application_id=application.id) }}#applicant_name">Edit</a>
+                                        <form method="post" action="{{ url_for('analyst_application_analyze', application_id=application.id) }}">
+                                            <button type="submit" class="button button-primary analyst-mini-action">Analyze</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div class="analyst-empty-state is-hidden" id="analyst-filter-empty-state">
+                    <h3>No matching applications</h3>
+                    <p>Adjust the search terms or status filters to broaden the queue.</p>
+                </div>
+                {% else %}
+                <div class="analyst-empty-state">
+                    <h3>No applications in the queue yet</h3>
+                    <p>This dashboard is seed-friendly and ready for live data. Create the first application to populate the analyst workflow.</p>
+                    <a class="button button-primary" href="{{ url_for('application_new') }}">Create First Application</a>
+                </div>
+                {% endif %}
+            </div>
+
+            <aside class="analyst-detail-panel">
+                <div class="analyst-panel-header">
+                    <div>
+                        <p class="eyebrow">Selected Application</p>
+                        <h2>Detail view</h2>
+                    </div>
+                    <a class="button button-ghost" href="{{ url_for('analyst_applications', format='json') }}">JSON Feed</a>
+                </div>
+
+                <div class="analyst-detail-card {% if not selected_application %}empty{% endif %}" id="analyst-detail-card">
+                    {% if selected_application %}
+                    <div class="analyst-detail-topline">
+                        <div>
+                            <span class="analyst-detail-kicker">Application #{{ selected_application.id }}</span>
+                            <h3 id="detail-applicant-name">{{ selected_application.applicant_name }}</h3>
+                        </div>
+                        <span class="analyst-status-badge {{ selected_application.status_badge_class }}" id="detail-status">{{ selected_application.status_label }}</span>
+                    </div>
+
+                    <div class="analyst-detail-grid">
+                        <div class="analyst-detail-item">
+                            <span class="analyst-detail-label">SK_ID_CURR</span>
+                            <strong id="detail-sk-id">{{ selected_application.sk_id_curr or "—" }}</strong>
+                        </div>
+                        <div class="analyst-detail-item">
+                            <span class="analyst-detail-label">Submitted</span>
+                            <strong id="detail-date">{{ selected_application.submitted_at }}</strong>
+                        </div>
+                        <div class="analyst-detail-item">
+                            <span class="analyst-detail-label">Tier Type</span>
+                            <strong id="detail-tier">{{ selected_application.tier_type }}</strong>
+                        </div>
+                        <div class="analyst-detail-item">
+                            <span class="analyst-detail-label">Model Version</span>
+                            <strong class="monospace" id="detail-model-version">{{ selected_application.last_model_version or "—" }}</strong>
+                        </div>
+                    </div>
+
+                    <div class="analyst-detail-score">
+                        <div class="analyst-score-block">
+                            <span class="analyst-detail-label">Last Decision</span>
+                            <div id="detail-decision">
+                                {% if selected_application.last_decision %}
+                                <span class="decision-badge {{ selected_application.decision_badge_class }}">{{ selected_application.decision_label }}</span>
+                                {% else %}
+                                <span class="analyst-detail-placeholder">No saved decision</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="analyst-score-block">
+                            <span class="analyst-detail-label">Last Probability</span>
+                            <strong class="analyst-probability" id="detail-probability">{{ selected_application.last_probability_text }}</strong>
+                        </div>
+                    </div>
+
+                    <div class="analyst-detail-actions" id="detail-actions">
+                        <a class="button button-ghost" id="detail-view-link" href="{{ url_for('analyst_application_detail', application_id=selected_application.id) }}" data-credit-brief-open="{{ selected_application.id }}">View</a>
+                        <a class="button button-ghost" id="detail-edit-link" href="{{ url_for('analyst_application_detail', application_id=selected_application.id) }}#applicant_name">Edit</a>
+                        <form method="post" id="detail-analyze-form" action="{{ url_for('analyst_application_analyze', application_id=selected_application.id) }}">
+                            <button type="submit" class="button button-primary">Analyze</button>
+                        </form>
+                        <a class="button button-ghost" id="detail-report-link" href="{{ url_for('analyst_application_report', application_id=selected_application.id) }}">Detail View</a>
+                    </div>
+                    {% else %}
+                    <div class="analyst-empty-state compact">
+                        <h3>No selected application</h3>
+                        <p>Once records exist, choosing a row in the master list will populate this detail panel with context and actions.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </aside>
+        </div>
+    </div>
+</section>
+
+<div class="credit-brief-overlay is-hidden" id="credit-brief-overlay" aria-hidden="true">
+    <div class="credit-brief-backdrop" data-credit-brief-close></div>
+    <aside class="credit-brief-drawer" id="credit-brief-drawer" aria-labelledby="credit-brief-title" tabindex="-1">
+        <div class="credit-brief-header">
+            <div>
+                <p class="eyebrow">Credit Brief</p>
+                <h2 id="credit-brief-title">Application summary</h2>
+            </div>
+            <button type="button" class="credit-brief-close" aria-label="Close credit brief" data-credit-brief-close>&times;</button>
+        </div>
+
+        <div class="credit-brief-body">
+            <section class="credit-brief-section">
+                <div class="credit-brief-section-heading">
+                    <h3>Applicant identity</h3>
+                    <span class="analyst-status-badge" id="brief-status">Status</span>
+                </div>
+                <div class="credit-brief-grid two-column">
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Applicant Name</span>
+                        <strong id="brief-applicant-name">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">SK_ID_CURR</span>
+                        <strong id="brief-sk-id">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Submission Date</span>
+                        <strong id="brief-submitted-at">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Last Updated</span>
+                        <strong id="brief-updated-at">—</strong>
+                    </div>
+                </div>
+            </section>
+
+            <section class="credit-brief-section">
+                <div class="credit-brief-section-heading">
+                    <h3>Application profile</h3>
+                    <span class="credit-brief-tier" id="brief-tier">REDUCED</span>
+                </div>
+                <div class="credit-brief-grid two-column">
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Income Total</span>
+                        <strong id="brief-income">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Credit Amount</span>
+                        <strong id="brief-credit">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Annuity</span>
+                        <strong id="brief-annuity">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Goods Price</span>
+                        <strong id="brief-goods-price">—</strong>
+                    </div>
+                </div>
+            </section>
+
+            <section class="credit-brief-section">
+                <div class="credit-brief-section-heading">
+                    <h3>External sources</h3>
+                </div>
+                <div class="credit-brief-grid three-column">
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">EXT_SOURCE_1</span>
+                        <strong id="brief-ext-1">—</strong>
+                    </div>
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">EXT_SOURCE_2</span>
+                        <strong id="brief-ext-2">—</strong>
+                    </div>
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">EXT_SOURCE_3</span>
+                        <strong id="brief-ext-3">—</strong>
+                    </div>
+                </div>
+            </section>
+
+            <section class="credit-brief-section">
+                <div class="credit-brief-section-heading">
+                    <h3>Aggregate coverage snapshot</h3>
+                </div>
+                <div class="credit-brief-grid two-column" id="brief-aggregate-grid">
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">Bureau</span>
+                        <strong id="brief-bureau">Not active</strong>
+                    </div>
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">Previous Applications</span>
+                        <strong id="brief-previous">Not active</strong>
+                    </div>
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">Installments</span>
+                        <strong id="brief-installments">Not active</strong>
+                    </div>
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">POS Cash</span>
+                        <strong id="brief-pos-cash">Not active</strong>
+                    </div>
+                    <div class="credit-brief-item compact">
+                        <span class="credit-brief-label">Credit Card</span>
+                        <strong id="brief-credit-card">Not active</strong>
+                    </div>
+                </div>
+            </section>
+
+            <section class="credit-brief-section">
+                <div class="credit-brief-section-heading">
+                    <h3>Last model result</h3>
+                </div>
+                <div class="credit-brief-grid two-column">
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Last Decision</span>
+                        <div id="brief-last-decision">—</div>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Last Probability</span>
+                        <strong id="brief-last-probability">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Model Version</span>
+                        <strong class="monospace" id="brief-model-version">—</strong>
+                    </div>
+                    <div class="credit-brief-item">
+                        <span class="credit-brief-label">Fairness Audit</span>
+                        <div id="brief-fairness-status">—</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </aside>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.__ANALYST_HUB_DATA__ = {
+    applications: {{ applications | tojson }},
+    healthSnapshot: {{ health_snapshot | tojson }}
+};
+</script>
+<script src="{{ url_for('ui_static', filename='analyst_hub.js') }}"></script>
+{% endblock %}

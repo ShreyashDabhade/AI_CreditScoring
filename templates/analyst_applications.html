@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">Analyst Applications</p>
+        <h1>Application queue</h1>
+        <p class="page-intro">Rendered list of all persisted applications in SQLite.</p>
+    </div>
+</section>
+
+<section class="section section-base">
+    <div class="section-shell">
+        <div class="form-panel">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Applicant</th>
+                            <th>Status</th>
+                            <th>Tier</th>
+                            <th>Last Decision</th>
+                            <th>Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for application in applications %}
+                        <tr>
+                            <td><a href="{{ url_for('analyst_application_detail', application_id=application.id) }}">{{ application.id }}</a></td>
+                            <td>{{ application.applicant_name }}</td>
+                            <td>{{ application.current_status }}</td>
+                            <td>{{ application.tier_type }}</td>
+                            <td>{{ application.last_decision or "-" }}</td>
+                            <td>{{ application.updated_at }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6">No applications available.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

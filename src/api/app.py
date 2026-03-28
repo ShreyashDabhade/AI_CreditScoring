@@ -26,6 +26,7 @@ from configs.config import (
     FULL_REQUIRED_SECTIONS,
     MODEL_VERSIONS,
 )
+from src.db_manager import DEFAULT_DB_FILENAME, init_database
 from src.explainability import render_reason, top_5_explanations_from_shap
 from src.runtime_verification import validate_transformed_frame
 
@@ -33,6 +34,7 @@ ROUTER_VERSION = "router_v1.0.0"
 POLICY_VERSION = "policy_v1.0.0"
 DEFAULT_FAIRNESS_VERSION_TAG = "2026Q1"
 RUNTIME_EXTENSION_KEY = "mastermind_runtime"
+APPLICATION_DB_EXTENSION_KEY = "mastermind_application_db_path"
 PROCESSED_MANIFEST_FILENAME = "processed_artifact_manifest.json"
 REPRODUCIBILITY_REPORT_FILENAME = "reproducibility_report.json"
 FAIRNESS_RESULT_FILENAME = "model_fairness_audit_passed.joblib"
@@ -228,7 +230,7 @@ class ApiError(Exception):
     missing_fields: tuple[str, ...] = ()
 
     def to_response(self):
-        payload = {
+        payload: dict[str, Any] = {
             "error_code": self.error_code,
             "message": self.message,
         }
@@ -322,12 +324,18 @@ def create_app(
     processed_dir: str | None = None,
     mock_mode: bool = False,
     strict_artifacts: bool = True,
+    application_db_path: str | None = None,
 ) -> Flask:
     """Create the Flask app with eager startup validation."""
 
     resolved_artifact_dir, resolved_processed_dir = _resolve_runtime_dirs(
         artifact_dir,
         processed_dir,
+        mock_mode=mock_mode,
+    )
+    resolved_application_db_path = _resolve_application_db_path(
+        application_db_path,
+        processed_dir=resolved_processed_dir,
         mock_mode=mock_mode,
     )
 
@@ -341,8 +349,12 @@ def create_app(
         )
     )
 
+    init_database(resolved_application_db_path)
+
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.extensions[RUNTIME_EXTENSION_KEY] = runtime
+    app.extensions[APPLICATION_DB_EXTENSION_KEY] = resolved_application_db_path
+    app.config["APPLICATION_DB_PATH"] = resolved_application_db_path
 
     @app.get("/")
     @app.get("/demo")
@@ -542,6 +554,22 @@ def _resolve_runtime_dirs(
         resolved_artifact_dir = artifact_dir or ARTIFACT_DIR
         resolved_processed_dir = processed_dir or DATA_DIR
     return (os.path.abspath(resolved_artifact_dir), os.path.abspath(resolved_processed_dir))
+
+
+def _resolve_application_db_path(
+    application_db_path: str | None,
+    *,
+    processed_dir: str,
+    mock_mode: bool,
+) -> str:
+    explicit = application_db_path or os.getenv("MASTERMIND_DB_PATH")
+    if explicit:
+        return os.path.abspath(explicit)
+
+    if mock_mode:
+        return os.path.abspath(os.path.join(processed_dir, DEFAULT_DB_FILENAME))
+
+    return os.path.abspath(os.path.join(os.path.dirname(processed_dir), DEFAULT_DB_FILENAME))
 
 
 def _build_mock_runtime(artifact_dir: str, processed_dir: str) -> ApiRuntime:

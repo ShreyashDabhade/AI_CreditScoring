@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% from "partials/_application_form_macros.html" import render_section %}
+
+{% block content %}
+{% set payload = application.application_payload_obj or {} %}
+{% set sections = ui_config.sections or [] %}
+
+<section class="section page-header">
+    <div class="section-shell">
+        <p class="eyebrow">Analyst Edit Workflow</p>
+        <h1>Edit saved application #{{ application.id }}</h1>
+        <p class="page-intro">Adjust the saved borrower record before analysis, keep REDUCED and FULL semantics intact, and persist a compact change summary for auditability.</p>
+    </div>
+</section>
+
+<section class="section section-base">
+    <div class="section-shell">
+        {% if request.args.get('error') %}
+        <div class="alert alert-danger" role="alert">{{ request.args.get('error') }}</div>
+        {% endif %}
+
+        <div class="portal-layout analyst-edit-layout">
+            <div class="portal-main">
+                <div class="form-panel">
+                    <form method="post" action="{{ url_for('analyst_application_update', application_id=application.id) }}" id="analyst-edit-form" novalidate>
+                        <input type="hidden" name="tier_type" id="analyst-tier-input" value="{{ application.tier_type }}">
+                        <textarea name="application_payload_json" id="analyst_application_payload_json" class="is-hidden"></textarea>
+
+                        <section class="portal-section-card portal-intake-card">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">Record Context</p>
+                                    <h2>Borrower and workflow</h2>
+                                </div>
+                                <span class="portal-section-completion" id="analyst-meta-completion">No edits detected yet</span>
+                            </div>
+
+                            <div class="form-grid">
+                                <div class="input-field portal-input-field">
+                                    <label for="analyst_applicant_name">
+                                        <span>Applicant Name</span>
+                                        <span class="field-badge required">Required</span>
+                                    </label>
+                                    <input
+                                        id="analyst_applicant_name"
+                                        name="applicant_name"
+                                        type="text"
+                                        value="{{ application.applicant_name }}"
+                                        data-analyst-meta-required="true"
+                                        data-original-value="{{ application.applicant_name }}"
+                                        required
+                                    >
+                                </div>
+
+                                <div class="input-field portal-input-field">
+                                    <label for="analyst_sk_id_curr">
+                                        <span>SK_ID_CURR</span>
+                                        <span class="field-badge optional">Optional</span>
+                                    </label>
+                                    <input
+                                        id="analyst_sk_id_curr"
+                                        name="sk_id_curr"
+                                        type="number"
+                                        step="1"
+                                        value="{{ application.sk_id_curr or '' }}"
+                                        data-original-value="{{ application.sk_id_curr or '' }}"
+                                    >
+                                </div>
+
+                                <div class="input-field portal-input-field">
+                                    <label for="analyst_current_status">
+                                        <span>Current Status</span>
+                                        <span class="field-badge required">Required</span>
+                                    </label>
+                                    <select id="analyst_current_status" name="current_status" data-original-value="{{ application.current_status }}">
+                                        {% for status in allowed_statuses %}
+                                        <option value="{{ status }}" {% if application.current_status == status %}selected{% endif %}>{{ status }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+
+                                <div class="input-field portal-input-field">
+                                    <label>
+                                        <span>Saved Timestamps</span>
+                                        <span class="field-badge optional">Read only</span>
+                                    </label>
+                                    <div class="analyst-static-metadata">
+                                        <span>Submitted: {{ application.submitted_at }}</span>
+                                        <span>Updated: {{ application.updated_at }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="portal-section-card">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">Coverage Tier</p>
+                                    <h2>Tier-preserving edit mode</h2>
+                                </div>
+                                <span class="portal-section-completion" id="analyst-tier-hint">{{ application.tier_type }} currently selected</span>
+                            </div>
+
+                            <div class="tier-selector portal-tier-selector" role="tablist" aria-label="Coverage tier">
+                                <button type="button" class="tier-toggle{% if application.tier_type == 'REDUCED' %} active{% endif %}" data-analyst-tier-toggle data-tier="REDUCED" aria-selected="{{ 'true' if application.tier_type == 'REDUCED' else 'false' }}">REDUCED</button>
+                                <button type="button" class="tier-toggle{% if application.tier_type == 'FULL' %} active{% endif %}" data-analyst-tier-toggle data-tier="FULL" aria-selected="{{ 'true' if application.tier_type == 'FULL' else 'false' }}">FULL</button>
+                            </div>
+                            <p class="tier-description" id="analyst-tier-description"></p>
+                        </section>
+
+                        {% if sections %}
+                        {{ render_section(sections[0], payload, optional=False, completion_id="analyst-application-completion") }}
+                        {% endif %}
+
+                        <section class="portal-section-card portal-full-panel{% if application.tier_type != 'FULL' %} is-hidden{% endif %}" id="analyst-full-panel">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">FULL Tier Aggregates</p>
+                                    <h2>Aggregate families</h2>
+                                </div>
+                                <span class="portal-section-completion" id="analyst-full-summary">Evaluating aggregate coverage</span>
+                            </div>
+                            <p class="page-intro portal-inline-copy">Blank FULL aggregate fields are saved explicitly as <code>0</code>. Edited values are highlighted before you save.</p>
+
+                            <div class="accordion portal-accordion" id="analyst-full-accordion">
+                                {% for section in sections[1:] %}
+                                {{ render_section(section, payload, optional=True, accordion=True, completion_id="analyst-completion-" ~ section.name) }}
+                                {% endfor %}
+                            </div>
+                        </section>
+
+                        <section class="portal-section-card">
+                            <div class="portal-section-header">
+                                <div>
+                                    <p class="eyebrow">Save Review</p>
+                                    <h2>Change tracker</h2>
+                                </div>
+                                <span class="portal-section-completion" id="analyst-change-pill">No field changes yet</span>
+                            </div>
+
+                            <div class="portal-readiness-grid">
+                                <div class="portal-readiness-item">
+                                    <span class="portal-readiness-label">Required Fields</span>
+                                    <span class="portal-readiness-value" id="analyst-required-status">Ready</span>
+                                </div>
+                                <div class="portal-readiness-item">
+                                    <span class="portal-readiness-label">Modified Fields</span>
+                                    <span class="portal-readiness-value" id="analyst-modified-count">0</span>
+                                </div>
+                                <div class="portal-readiness-item">
+                                    <span class="portal-readiness-label">FULL Defaults</span>
+                                    <span class="portal-readiness-value" id="analyst-defaults-status">Not active</span>
+                                </div>
+                            </div>
+
+                            <div class="analyst-change-list" id="analyst-change-list">
+                                <p class="field-hint">No field changes have been made in this session yet.</p>
+                            </div>
+
+                            <p class="analysis-feedback portal-feedback" id="analyst-edit-feedback" aria-live="polite"></p>
+                        </section>
+
+                        <div class="analysis-action portal-submit-row">
+                            <button type="submit" class="button button-primary button-large">Save Updates</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <aside class="portal-sidecar analyst-edit-sidecar">
+                <div class="feature-block portal-sidecar-card">
+                    <h3>Current application snapshot</h3>
+                    <p>Status: {{ application.current_status }}</p>
+                    <p>Tier: {{ application.tier_type }}</p>
+                    <p>Last decision: {{ application.last_decision or "Not analyzed yet" }}</p>
+                </div>
+
+                <div class="feature-block portal-sidecar-card">
+                    <h3>Recent change history</h3>
+                    {% if change_history %}
+                    <div class="analyst-history-list">
+                        {% for entry in change_history %}
+                        <article class="analyst-history-item">
+                            <strong>{{ entry.changed_at }}</strong>
+                            <p>{{ entry.changes | length }} field{{ "" if entry.changes | length == 1 else "s" }} changed</p>
+                            <p class="field-hint">
+                                {% for change in entry.changes[:3] %}
+                                {{ change.field }}{% if not loop.last %}, {% endif %}
+                                {% endfor %}
+                            </p>
+                        </article>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p>No saved change history yet.</p>
+                    {% endif %}
+                </div>
+
+                <div class="feature-block portal-sidecar-card">
+                    <h3>Score history</h3>
+                    {% if score_history %}
+                    <div class="analyst-history-list">
+                        {% for run in score_history[:5] %}
+                        <article class="analyst-history-item">
+                            <strong>{{ run.scored_at }}</strong>
+                            <p>{{ run.decision or "No decision" }}{% if run.probability is not none %} • {{ "%.1f%%"|format(run.probability * 100) }}{% endif %}</p>
+                        </article>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p>No score runs stored yet.</p>
+                    {% endif %}
+                </div>
+            </aside>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('ui_static', filename='analyst_edit.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,403 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section page-header report-hero-section">
+    <div class="section-shell">
+        <div class="report-hero-card">
+            <div class="report-hero-copy">
+                <p class="eyebrow">Deep Insight Report</p>
+                <div class="report-hero-headline">
+                    <div>
+                        <h1>{{ application.applicant_name }}</h1>
+                        <p class="report-hero-meta">
+                            Application #{{ application.id }}
+                            {% if application.sk_id_curr %}
+                            <span class="report-inline-separator">|</span>
+                            SK_ID_CURR {{ application.sk_id_curr }}
+                            {% endif %}
+                        </p>
+                    </div>
+
+                    <div class="report-hero-outcome">
+                        <span class="decision-badge {{ report.decision_badge_class }}">{{ report.decision_label }}</span>
+                        <strong class="report-hero-probability">{{ report.probability_text }}</strong>
+                        <span class="report-hero-caption">Calibrated probability of default</span>
+                    </div>
+                </div>
+                <p class="report-hero-summary">{{ report.decision_summary }}</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section section-base">
+    <div class="section-shell">
+        <div class="report-meta-strip">
+            <article class="report-meta-card">
+                <span class="report-meta-label">Fairness Audit</span>
+                <strong class="report-meta-value">
+                    <span class="decision-badge {{ 'approve' if report.fairness_audit_passed else 'decline' }}">
+                        {{ "Passed" if report.fairness_audit_passed else "Not passed" }}
+                    </span>
+                </strong>
+            </article>
+            <article class="report-meta-card">
+                <span class="report-meta-label">Model Version</span>
+                <strong class="report-meta-value monospace">{{ report.model_version }}</strong>
+            </article>
+            <article class="report-meta-card">
+                <span class="report-meta-label">Coverage Tier</span>
+                <strong class="report-meta-value">{{ report.coverage_tier }}</strong>
+            </article>
+            <article class="report-meta-card">
+                <span class="report-meta-label">Analyzed</span>
+                <strong class="report-meta-value">{{ report.analyzed_at_display }}</strong>
+            </article>
+        </div>
+
+        <div class="report-layout">
+            <div class="report-main-column">
+                <article class="report-panel report-gauge-panel">
+                    <div class="report-panel-header">
+                        <div>
+                            <p class="eyebrow">Decision Signal</p>
+                            <h2>Risk posture</h2>
+                        </div>
+                        <span class="report-panel-kicker">Executive summary</span>
+                    </div>
+
+                    <div class="report-gauge-layout">
+                        <div class="report-gauge-shell">
+                            <div class="report-gauge" style="--gauge-value: {{ '%.1f'|format(report.gauge_value) }}%;">
+                                <div class="report-gauge-inner">
+                                    <span class="report-gauge-label">PD</span>
+                                    <strong>{{ report.probability_text }}</strong>
+                                    <span class="report-gauge-caption">{{ report.decision_label }}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="report-gauge-copy">
+                            <h3>Decision framing</h3>
+                            <p>{{ report.decision_summary }}</p>
+                            <div class="report-bullet-list">
+                                <div class="report-bullet-item">
+                                    <span class="report-bullet-label">Current status</span>
+                                    <strong>{{ application.current_status.replace('_', ' ') }}</strong>
+                                </div>
+                                <div class="report-bullet-item">
+                                    <span class="report-bullet-label">Last updated</span>
+                                    <strong>{{ report.updated_display }}</strong>
+                                </div>
+                                <div class="report-bullet-item">
+                                    <span class="report-bullet-label">Live runtime</span>
+                                    <strong class="monospace">{{ health_snapshot.model_version }}</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <div class="report-two-column">
+                    <article class="report-panel">
+                        <div class="report-panel-header">
+                            <div>
+                                <p class="eyebrow">SHAP Narrative</p>
+                                <h2>Readable model insights</h2>
+                            </div>
+                        </div>
+
+                        <div class="report-narrative-list">
+                            {% for narrative in report.shap_narratives %}
+                            <article class="report-narrative-card">
+                                <span class="report-narrative-rank">{{ "%02d"|format(loop.index) }}</span>
+                                <p>{{ narrative }}</p>
+                            </article>
+                            {% endfor %}
+                        </div>
+                    </article>
+
+                    <article class="report-panel">
+                        <div class="report-panel-header">
+                            <div>
+                                <p class="eyebrow">Top Drivers</p>
+                                <h2>Feature contribution stack</h2>
+                            </div>
+                        </div>
+
+                        {% if report.top_drivers %}
+                        <div class="report-driver-list">
+                            {% for driver in report.top_drivers %}
+                            <article class="report-driver-card">
+                                <div class="report-driver-topline">
+                                    <span class="report-driver-rank">{{ "%02d"|format(driver.rank) }}</span>
+                                    <div>
+                                        <h3>{{ driver.feature_label }}</h3>
+                                        <p>{{ driver.reason }}</p>
+                                    </div>
+                                </div>
+                                <div class="report-driver-bar">
+                                    <span style="width: {{ driver.weight_pct }}%;"></span>
+                                </div>
+                            </article>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <div class="report-empty-state">
+                            <h3>No driver stack available</h3>
+                            <p>This score run does not include stored explanation artifacts, so the report falls back to summary messaging only.</p>
+                        </div>
+                        {% endif %}
+                    </article>
+                </div>
+
+                <article class="report-panel">
+                    <div class="report-panel-header">
+                        <div>
+                            <p class="eyebrow">Application Summary</p>
+                            <h2>Snapshot of the scored case</h2>
+                        </div>
+                    </div>
+
+                    <div class="report-summary-grid">
+                        <section class="report-summary-card">
+                            <h3>Core application metrics</h3>
+                            <div class="report-key-value-grid">
+                                {% for item in report.application_snapshot %}
+                                <div class="report-key-value-item">
+                                    <span>{{ item.label }}</span>
+                                    <strong>{{ item.value }}</strong>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </section>
+
+                        <section class="report-summary-card">
+                            <h3>Key external source values</h3>
+                            <div class="report-key-value-grid">
+                                {% for item in report.external_sources %}
+                                <div class="report-key-value-item">
+                                    <span>{{ item.label }}</span>
+                                    <strong>{{ item.value }}</strong>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </section>
+
+                        <section class="report-summary-card">
+                            <h3>Aggregate coverage snapshot</h3>
+                            <div class="report-key-value-grid">
+                                {% for item in report.aggregate_snapshot %}
+                                <div class="report-key-value-item">
+                                    <span>{{ item.label }}</span>
+                                    <strong>{{ item.value }}</strong>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </section>
+
+                        <section class="report-summary-card">
+                            <h3>Last model result</h3>
+                            <div class="report-key-value-grid">
+                                {% for item in report.last_model_result %}
+                                <div class="report-key-value-item">
+                                    <span>{{ item.label }}</span>
+                                    <strong class="{% if item.label == 'Model Version' %}monospace{% endif %}">{{ item.value }}</strong>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </section>
+                    </div>
+                </article>
+
+                <article class="report-panel report-simulator-panel" id="what-if-simulator-root">
+                    <div class="report-panel-header">
+                        <div>
+                            <p class="eyebrow">What-If Simulator</p>
+                            <h2>Non-persistent scenario testing</h2>
+                        </div>
+                        <span class="report-panel-kicker">Temporary only</span>
+                    </div>
+
+                    <p class="report-simulator-intro">Adjust a curated set of high-impact fields and run the same credit model against a temporary clone of this saved payload. No changes are written back unless the analyst later saves through the edit workflow.</p>
+
+                    <div class="report-simulator-grid">
+                        {% for field in report.simulator_fields %}
+                        <label class="report-simulator-field">
+                            <span class="report-simulator-label">{{ field.label }}</span>
+                            <span class="report-simulator-current">Current: {{ field.value_display }}</span>
+                            <input
+                                type="number"
+                                id="{{ field.input_id }}"
+                                name="{{ field.name }}"
+                                value="{{ field.value }}"
+                                step="{{ field.step }}"
+                                {% if field.min is defined %}min="{{ field.min }}"{% endif %}
+                                {% if field.max is defined %}max="{{ field.max }}"{% endif %}
+                                data-sim-field
+                            >
+                        </label>
+                        {% endfor %}
+                    </div>
+
+                    <div class="report-simulator-actions">
+                        <button type="button" class="button button-primary" id="simulate-run-button">Simulate Scenario</button>
+                        <button type="button" class="button button-ghost" id="simulate-reset-button">Reset Inputs</button>
+                        <span class="report-simulator-note">Simulation only. The application record and score history remain unchanged.</span>
+                    </div>
+
+                    <div class="report-simulator-feedback is-hidden" id="simulate-loading-state">
+                        <div class="report-simulator-spinner"></div>
+                        <span>Running a temporary score against the saved payload clone...</span>
+                    </div>
+
+                    <div class="report-simulator-feedback report-simulator-error is-hidden" id="simulate-error-state"></div>
+
+                    <div class="report-simulator-result is-hidden" id="simulate-result-card">
+                        <div class="report-sim-metrics">
+                            <article class="report-sim-metric">
+                                <span>Original probability</span>
+                                <strong id="sim-original-probability">{{ report.probability_text }}</strong>
+                                <p id="sim-original-decision">{{ report.decision_label }}</p>
+                            </article>
+                            <article class="report-sim-metric emphasis">
+                                <span>Simulated probability</span>
+                                <strong id="sim-probability">-</strong>
+                                <p id="sim-decision">Pending</p>
+                            </article>
+                            <article class="report-sim-metric" id="sim-delta-card">
+                                <span>Delta</span>
+                                <strong id="sim-delta">-</strong>
+                                <p id="sim-change-count">0 changes</p>
+                            </article>
+                        </div>
+
+                        <div class="report-sim-changes">
+                            <div class="report-panel-header">
+                                <div>
+                                    <p class="eyebrow">Changed Features</p>
+                                    <h3>Scenario summary</h3>
+                                </div>
+                            </div>
+                            <div class="report-sim-change-list" id="sim-change-list"></div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="report-panel">
+                    <details class="report-raw-output" {% if report.has_score_run %}open{% endif %}>
+                        <summary>
+                            <span>
+                                <span class="eyebrow">Raw Output</span>
+                                <strong>Model response payload</strong>
+                            </span>
+                            <span class="report-raw-hint">Expand for full JSON</span>
+                        </summary>
+                        {% if report.has_score_run %}
+                        <pre>{{ report.raw_output_pretty }}</pre>
+                        {% else %}
+                        <div class="report-empty-state">
+                            <h3>No persisted model output yet</h3>
+                            <p>Run an analysis from the analyst hub to populate the full response payload and score history.</p>
+                        </div>
+                        {% endif %}
+                    </details>
+                </article>
+            </div>
+
+            <aside class="report-side-column">
+                <article class="report-panel">
+                    <div class="report-panel-header">
+                        <div>
+                            <p class="eyebrow">Case Record</p>
+                            <h2>Applicant summary</h2>
+                        </div>
+                    </div>
+
+                    <div class="report-key-value-stack">
+                        <div class="report-key-value-row">
+                            <span>Applicant</span>
+                            <strong>{{ application.applicant_name }}</strong>
+                        </div>
+                        <div class="report-key-value-row">
+                            <span>SK_ID_CURR</span>
+                            <strong>{{ application.sk_id_curr or "-" }}</strong>
+                        </div>
+                        <div class="report-key-value-row">
+                            <span>Tier type</span>
+                            <strong>{{ report.coverage_tier }}</strong>
+                        </div>
+                        <div class="report-key-value-row">
+                            <span>Submitted</span>
+                            <strong>{{ report.submission_display }}</strong>
+                        </div>
+                        <div class="report-key-value-row">
+                            <span>Last updated</span>
+                            <strong>{{ report.updated_display }}</strong>
+                        </div>
+                        <div class="report-key-value-row">
+                            <span>Current status</span>
+                            <strong>{{ application.current_status.replace('_', ' ') }}</strong>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="report-panel">
+                    <div class="report-panel-header">
+                        <div>
+                            <p class="eyebrow">Score History</p>
+                            <h2>Persisted analyses</h2>
+                        </div>
+                        <span class="report-panel-kicker">{{ report.score_history_count }} run{{ "" if report.score_history_count == 1 else "s" }}</span>
+                    </div>
+
+                    {% if report.score_history %}
+                    <div class="report-history-list">
+                        {% for run in report.score_history %}
+                        <article class="report-history-card {% if run.is_latest %}latest{% endif %}">
+                            <div class="report-history-topline">
+                                <span class="decision-badge {{ run.decision_badge_class }}">{{ run.decision_label }}</span>
+                                {% if run.is_latest %}
+                                <span class="report-history-kicker">Latest</span>
+                                {% endif %}
+                            </div>
+                            <div class="report-key-value-stack compact">
+                                <div class="report-key-value-row">
+                                    <span>Analyzed</span>
+                                    <strong>{{ run.scored_at_display }}</strong>
+                                </div>
+                                <div class="report-key-value-row">
+                                    <span>Calibrated PD</span>
+                                    <strong>{{ run.probability_text }}</strong>
+                                </div>
+                                <div class="report-key-value-row">
+                                    <span>Model Version</span>
+                                    <strong class="monospace">{{ run.model_version }}</strong>
+                                </div>
+                            </div>
+                        </article>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="report-empty-state compact">
+                        <h3>No analyses stored</h3>
+                        <p>The score history rail will populate automatically as analysts re-run evaluations on this saved application.</p>
+                    </div>
+                    {% endif %}
+                </article>
+            </aside>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.__REPORT_SIMULATOR__ = {
+        endpoint: {{ url_for('analyst_application_simulate', application_id=application.id) | tojson }},
+        originalProbabilityText: {{ report.probability_text | tojson }},
+        originalDecisionLabel: {{ report.decision_label | tojson }}
+    };
+</script>
+<script src="{{ url_for('ui_static', filename='analyst_report.js') }}"></script>
+{% endblock %}
