@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <body>
+    <h2>AI Credit Chatbot</h2>
+
+    <input id="query" placeholder="Ask something..." style="width: 300px" />
+    <button onclick="sendQuery()">Send</button>
+
+    <pre id="output"></pre>
+
+    <script>
+      async function sendQuery() {
+        const query = document.getElementById("query").value;
+
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ query }),
+        });
+
+        const data = await res.json();
+        document.getElementById("output").innerText =
+          data.response || data.error || JSON.stringify(data, null, 2);
+      }
+    </script>
+  </body>
+</html>

@@ -27,6 +27,16 @@ REASON_MAP: dict[str, str] = {
     "BUREAU_": "External credit history indicates elevated repayment risk",
     "CC_": "Credit card utilization or delinquency history indicates elevated risk",
     "POS_": "Past point-of-sale loan behavior indicates elevated risk",
+    "mock_ratio": "high debt-to-income ratio",
+    "mock_credit": "large requested loan amount",
+    "mock_income": "income level is not strong relative to the borrowing request",
+    "mock_ext_mean": "external credit profile looks weaker than ideal",
+    "mock_social": "social-circle indicators suggest higher repayment risk",
+    "mock_bureau": "bureau history suggests elevated repayment risk",
+    "mock_previous": "previous application history suggests elevated repayment risk",
+    "mock_installments": "installment repayment history raises concern",
+    "mock_pos": "point-of-sale borrowing history raises concern",
+    "mock_cc": "credit card borrowing behavior raises concern",
 }
 
 DEFAULT_REASON: str = (

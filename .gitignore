@@ -53,3 +53,10 @@ notebooks/fairness_plots/*
 .idea/
 .DS_Store
 Thumbs.db
+
+logs/
+*.db
+*.db.bak
+*.sqlite
+*.sqlite3
+

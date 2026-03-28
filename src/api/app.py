@@ -17,6 +17,17 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from gemini_client import get_model_name
+
+# src/api/app.py (or wherever app starts)
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+api_key = os.getenv("GEMINI_API_KEY")
+
 from configs.config import (
     APPROVE_THRESHOLD,
     ARTIFACT_DIR,
@@ -343,6 +354,66 @@ def create_app(
 
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.extensions[RUNTIME_EXTENSION_KEY] = runtime
+    # Ensure DB_PATH and COLUMN_NAMES exist in config early so helper scripts
+    # and routes can read a consistent value even if blueprint registration
+    # later fails during import. These may be overridden when agent blueprint
+    # initializes the schema.
+    early_db_path = os.environ.get("DB_PATH", os.path.join("data", "applicants.db"))
+    os.environ.setdefault("SQLITE_DB_PATH", early_db_path)
+    app.config["DB_PATH"] = early_db_path
+    app.config["COLUMN_NAMES"] = []
+
+    # register analytics blueprint (analyst-facing query endpoint)
+    try:
+        from src.api.analytics import analytics_bp
+
+        app.register_blueprint(analytics_bp, url_prefix="/analyst")
+    except Exception:
+        app.logger.debug("Analytics blueprint not available or failed to register")
+
+    # register agent blueprint (query + explain endpoints)
+    try:
+        from src.api.agent_routes import agent_bp
+
+        def _validate_or_repair_db() -> tuple[str, list[str]]:
+            import logging
+            import sqlite3
+
+            db_path = os.getenv("SQLITE_DB_PATH", "data/applicants.db")
+            columns: list[str] = []
+            connection: sqlite3.Connection | None = None
+            try:
+                connection = sqlite3.connect(db_path)
+                cursor = connection.cursor()
+                cursor.execute("SELECT COUNT(*) FROM applicants")
+                count = int(cursor.fetchone()[0])
+                cursor.execute("SELECT SK_ID_CURR FROM applicants LIMIT 1")
+                cursor.fetchone()
+                cursor.execute("PRAGMA table_info(applicants)")
+                columns = [str(row[1]) for row in cursor.fetchall()]
+                if count > 0:
+                    logging.info(f"[DB] OK - {count} applicants loaded")
+                    return db_path, columns
+                logging.warning("[DB] DB is empty")
+            except Exception as exc:
+                logging.error(f"[DB] Check failed: {exc}")
+                logging.error("[DB] Run: python scripts/load_scored_db.py")
+                return db_path, columns
+            finally:
+                if connection is not None:
+                    connection.close()
+
+            return db_path, columns
+
+        db_path, column_names = _validate_or_repair_db()
+
+        # store in config for routes
+        app.config["DB_PATH"] = db_path
+        app.config["COLUMN_NAMES"] = column_names
+
+        app.register_blueprint(agent_bp)
+    except Exception:
+        app.logger.debug("Agent blueprint not available or failed to register")
 
     @app.get("/")
     @app.get("/demo")
@@ -353,6 +424,12 @@ def create_app(
             demo_config=_build_demo_config(loaded_runtime),
         )
 
+
+    @app.get("/test-chat")
+    def test_chat():
+        # Simple browser-based test UI for the chatbot (see src/api/templates/test_chat.html)
+        return render_template("test_chat.html")
+
     @app.get("/health")
     def health():
         loaded_runtime = _get_runtime(app)
@@ -362,6 +439,24 @@ def create_app(
                 "model_version": loaded_runtime.health_model_version,
                 "fairness_audit_passed": loaded_runtime.model_fairness_audit_passed,
                 "coverage_tiers_available": list(loaded_runtime.coverage_tiers_available),
+                "gemini_model": get_model_name(),
+                "db_path": os.getenv("SQLITE_DB_PATH", "data/applicants.db"),
+            }
+        )
+
+    @app.get("/api/db-info")
+    def db_info():
+        from src import db_loader
+
+        db_path = os.getenv("SQLITE_DB_PATH", "data/applicants.db")
+        summary = db_loader.get_applicants_db_summary(db_path)
+        return jsonify(
+            {
+                "total_applicants": summary.get("total_applicants", 0),
+                "sample_ids": summary.get("sample_ids", []),
+                "prediction_breakdown": summary.get("prediction_breakdown", {}),
+                "db_path": summary.get("db_path", db_path),
+                "contains_100038": summary.get("contains_100038", False),
             }
         )
 
