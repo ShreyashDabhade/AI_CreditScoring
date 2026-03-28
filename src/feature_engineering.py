@@ -13,10 +13,6 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from configs.config import (
-    MISSING_RATE_THRESHOLD,
-    RARE_CATEGORY_MIN_COUNT,
-)
 from src.runtime_verification import (
     column_sequence_hash,
     dataframe_fingerprint,
@@ -83,7 +79,6 @@ ENGINEERED_APP_FEATURE_COLS = [
     "CREDIT_INCOME_RATIO",
     "ANNUITY_INCOME_RATIO",
     "GOODS_CREDIT_RATIO",
-    "GOODS_INCOME_RATIO",
     "CREDIT_TERM_RATIO",
     "EMPLOYED_BIRTH_RATIO",
     "ID_PUBLISH_REG_RATIO",
@@ -202,52 +197,15 @@ FULL_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/full_feature_builder.joblib"
 REDUCED_FEATURE_BUILDER_ARTIFACT_PATH = "artifacts/reduced_feature_builder.joblib"
 FULL_FEATURE_BUILDER_MANIFEST_PATH = "artifacts/full_feature_builder.manifest.json"
 REDUCED_FEATURE_BUILDER_MANIFEST_PATH = "artifacts/reduced_feature_builder.manifest.json"
-FEATURE_ENGINEERING_VERSION = "feature-engineering-manifest-v3"
+FEATURE_ENGINEERING_VERSION = "feature-engineering-manifest-v2"
 AGGREGATE_CONTRACT_VERSION = f"full_{len(ALL_AGGREGATE_FEATURE_COLS)}__reduced_0"
 PROCESSED_SPLIT_NAMES = ["train", "val_model", "val_policy", "test"]
-REDUCED_FEATURE_FAMILY_COLS = {
-    "RAW_NUMERIC": NUMERIC_RAW_COLS,
-    "CATEGORICAL_CONTEXT": CATEGORICAL_MODEL_COLS,
-    "ENGINEERED_AFFORDABILITY": [
-        "AGE_YEARS",
-        "CREDIT_INCOME_RATIO",
-        "ANNUITY_INCOME_RATIO",
-        "GOODS_CREDIT_RATIO",
-        "GOODS_INCOME_RATIO",
-        "CREDIT_TERM_RATIO",
-    ],
-    "ENGINEERED_STABILITY": [
-        "EMPLOYED_BIRTH_RATIO",
-        "ID_PUBLISH_REG_RATIO",
-        "DAYS_EMPLOYED_ANOM",
-    ],
-    "ENGINEERED_TRUST": [
-        "EXT_SOURCE_MEAN",
-        "EXT_SOURCE_STD",
-        "EXT_12_PRODUCT",
-        "EXT_13_PRODUCT",
-        "EXT_23_PRODUCT",
-        "EXT_123_PRODUCT",
-        "EXT_12_DIFF",
-        "EXT_13_DIFF",
-        "EXT_23_DIFF",
-        "EXT_MIN",
-        "EXT_MAX",
-        "EXT_RANGE",
-        "EXT_SOURCE_COUNT",
-    ],
-    "ENGINEERED_BEHAVIORAL": [
-        "SOCIAL_CIRCLE_SUM",
-        "BUREAU_REQUEST_SUM",
-    ],
-}
 __all__ = [
     "FrozenFeatureBuilder",
     "fit_full_builder",
     "fit_reduced_builder",
     "build_full",
     "build_reduced",
-    "REDUCED_FEATURE_FAMILY_COLS",
     "pool_rare_categories",
     "safe_div",
     "assert_unique_key",
@@ -422,7 +380,6 @@ def _engineer_application_features(df: pd.DataFrame) -> pd.DataFrame:
     df["CREDIT_INCOME_RATIO"] = safe_div(df["AMT_CREDIT"], df["AMT_INCOME_TOTAL_CAPPED"] )
     df["ANNUITY_INCOME_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_INCOME_TOTAL_CAPPED"] )
     df["GOODS_CREDIT_RATIO"] = safe_div(df["AMT_GOODS_PRICE"], df["AMT_CREDIT"])
-    df["GOODS_INCOME_RATIO"] = safe_div(df["AMT_GOODS_PRICE"], df["AMT_INCOME_TOTAL_CAPPED"])
     df["CREDIT_TERM_RATIO"] = safe_div(df["AMT_ANNUITY"], df["AMT_CREDIT"])
     df["EMPLOYED_BIRTH_RATIO"] = safe_div(df["DAYS_EMPLOYED"], df["DAYS_BIRTH"])
     df["ID_PUBLISH_REG_RATIO"] = safe_div(df["DAYS_ID_PUBLISH"], df["DAYS_REGISTRATION"])
@@ -804,7 +761,7 @@ def _build_pre_model_frame(
 def _fit_rare_category_maps(
     df: pd.DataFrame,
     categorical_cols: list[str],
-    min_count: int = RARE_CATEGORY_MIN_COUNT,
+    min_count: int = 500,
 ) -> dict[str, set[str]]:
     maps: dict[str, set[str]] = {}
     for col in categorical_cols:
@@ -831,7 +788,7 @@ def _apply_rare_category_maps(
 
 def _fit_missing_flag_columns(df: pd.DataFrame) -> list[str]:
     miss_rate = df.isna().mean()
-    return miss_rate[miss_rate >= MISSING_RATE_THRESHOLD].index.tolist()
+    return miss_rate[miss_rate >= 0.05].index.tolist()
 
 
 def _create_missing_flag_columns(df: pd.DataFrame, flag_cols: list[str]) -> pd.DataFrame:
@@ -1122,7 +1079,7 @@ if __name__ == "__main__":
     assert result.shape[0] == 10
     assert result["AGE_YEARS"].notna().all()
     assert result["CREDIT_INCOME_RATIO"].isna().sum() == 0
-    print(f"  All {len(ENGINEERED_APP_FEATURE_COLS)} engineered columns present ... PASSED")
+    print("  All 13 feature columns present ... PASSED")
     print("  Row count preserved .............. PASSED")
     print("  AGE_YEARS no NaN ................. PASSED")
     print("  CREDIT_INCOME_RATIO no NaN ....... PASSED")

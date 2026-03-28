@@ -86,11 +86,6 @@ FULL_WEIGHTED_BLEND_MODEL_VERSION = "full_weighted_blend_v2.2.0"
 FULL_XGBOOST_CANDIDATE_PREFIX = "full_xgboost"
 FULL_WEIGHTED_BLEND_CANDIDATE_PREFIX = "full_weighted_blend"
 FULL_WEIGHTED_BLEND_METADATA_FILENAME = "full_weighted_blend_metadata.json"
-REDUCED_WEIGHTED_BLEND_MODEL_VERSION = "reduced_weighted_blend_v2.2.0"
-REDUCED_XGBOOST_CANDIDATE_PREFIX = "reduced_xgboost"
-REDUCED_LIGHTGBM_CANDIDATE_PREFIX = "reduced_lightgbm"
-REDUCED_WEIGHTED_BLEND_CANDIDATE_PREFIX = "reduced_weighted_blend"
-REDUCED_WEIGHTED_BLEND_METADATA_FILENAME = "reduced_weighted_blend_metadata.json"
 
 
 @dataclass
@@ -650,53 +645,6 @@ def _candidate_model_params(scale_pos_weight: float) -> list[tuple[str, dict[str
     ]
 
 
-def _candidate_reduced_model_params(scale_pos_weight: float) -> list[tuple[str, dict[str, Any]]]:
-    return _candidate_model_params(scale_pos_weight) + [
-        (
-            "tuned_d",
-            {
-                "n_estimators": 900,
-                "max_depth": 3,
-                "learning_rate": 0.02,
-                "subsample": 0.7,
-                "colsample_bytree": 0.7,
-                "reg_lambda": 6.0,
-                "min_child_weight": 12.0,
-                "gamma": 0.2,
-                "scale_pos_weight": scale_pos_weight,
-            },
-        ),
-        (
-            "tuned_e",
-            {
-                "n_estimators": 700,
-                "max_depth": 5,
-                "learning_rate": 0.025,
-                "subsample": 0.8,
-                "colsample_bytree": 0.65,
-                "reg_lambda": 5.0,
-                "min_child_weight": 12.0,
-                "gamma": 0.3,
-                "scale_pos_weight": scale_pos_weight,
-            },
-        ),
-        (
-            "tuned_f",
-            {
-                "n_estimators": 450,
-                "max_depth": 3,
-                "learning_rate": 0.05,
-                "subsample": 0.75,
-                "colsample_bytree": 0.6,
-                "reg_lambda": 8.0,
-                "min_child_weight": 15.0,
-                "gamma": 0.4,
-                "scale_pos_weight": scale_pos_weight,
-            },
-        ),
-    ]
-
-
 def _make_model(params: dict[str, Any]) -> XGBClassifier:
     return XGBClassifier(
         random_state=RANDOM_STATE,
@@ -962,220 +910,6 @@ def _write_json_artifact(artifact_dir: str, filename: str, payload: dict[str, An
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
     return path
-
-
-def _train_reduced_runtime_candidate(
-    train_X: pd.DataFrame,
-    train_y: np.ndarray,
-    val_model_X: pd.DataFrame,
-    val_model_y: np.ndarray,
-    val_policy_X: pd.DataFrame,
-    val_policy_y: np.ndarray,
-    test_X: pd.DataFrame,
-    test_y: np.ndarray,
-    artifact_dir: str,
-    *,
-    processed_manifest_fingerprint: str | None,
-) -> dict[str, Any]:
-    pos = int(train_y.sum())
-    neg = int(len(train_y) - pos)
-    scale_pos_weight = float(neg / max(pos, 1))
-
-    xgb_result = _train_best_model_family(
-        "xgboost",
-        _candidate_reduced_model_params(scale_pos_weight),
-        train_X,
-        train_y,
-        val_model_X,
-        val_model_y,
-    )
-    lgbm_result = _train_best_model_family(
-        "lightgbm",
-        _candidate_lgbm_params(scale_pos_weight),
-        train_X,
-        train_y,
-        val_model_X,
-        val_model_y,
-    )
-
-    xgb_val_policy_raw = xgb_result["model"].predict_proba(val_policy_X)[:, 1]
-    xgb_test_raw = xgb_result["model"].predict_proba(test_X)[:, 1]
-    lgbm_val_policy_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], val_policy_X)
-    lgbm_test_raw = _predict_lightgbm_raw_pd(lgbm_result["model"], test_X)
-
-    xgb_eval = _evaluate_calibrated_scores(val_policy_y, xgb_val_policy_raw, test_y, xgb_test_raw)
-    lgbm_eval = _evaluate_calibrated_scores(val_policy_y, lgbm_val_policy_raw, test_y, lgbm_test_raw)
-    weighted = _select_weighted_average_blend(
-        val_model_y,
-        xgb_result["val_model_raw_pd"],
-        lgbm_result["val_model_raw_pd"],
-    )
-    weighted_model = WeightedBlendModel(
-        xgb_result["model"],
-        lgbm_result["model"],
-        weight_xgboost=float(weighted["weight_xgb"]),
-        weight_lightgbm=float(weighted["weight_lgbm"]),
-        feature_count=int(train_X.shape[1]),
-    )
-    weighted_val_policy_raw = weighted_model.predict_raw_pd(val_policy_X)
-    weighted_test_raw = weighted_model.predict_raw_pd(test_X)
-    weighted_eval = _evaluate_calibrated_scores(
-        val_policy_y,
-        weighted_val_policy_raw,
-        test_y,
-        weighted_test_raw,
-    )
-
-    xgb_explainer = TreeShapExplainer(xgb_result["model"])
-    lgbm_explainer = TreeShapExplainer(lgbm_result["model"])
-    weighted_explainer = WeightedBlendShapExplainer(
-        xgb_explainer,
-        lgbm_explainer,
-        weight_xgboost=float(weighted["weight_xgb"]),
-        weight_lightgbm=float(weighted["weight_lgbm"]),
-    )
-
-    xgb_candidate_artifacts = _persist_runtime_bundle(
-        artifact_dir,
-        REDUCED_XGBOOST_CANDIDATE_PREFIX,
-        model=xgb_result["model"],
-        calibrator=xgb_eval["calibrator"],
-        explainer=xgb_explainer,
-    )
-    lgbm_candidate_artifacts = _persist_runtime_bundle(
-        artifact_dir,
-        REDUCED_LIGHTGBM_CANDIDATE_PREFIX,
-        model=lgbm_result["model"],
-        calibrator=lgbm_eval["calibrator"],
-        explainer=lgbm_explainer,
-    )
-    weighted_candidate_artifacts = _persist_runtime_bundle(
-        artifact_dir,
-        REDUCED_WEIGHTED_BLEND_CANDIDATE_PREFIX,
-        model=weighted_model,
-        calibrator=weighted_eval["calibrator"],
-        explainer=weighted_explainer,
-    )
-
-    xgb_candidate = {
-        "model_family": "xgboost",
-        "model_version": MODEL_VERSIONS["reduced"],
-        "selected_candidate": xgb_result["selected_candidate"],
-        "selected_params": xgb_result["selected_params"],
-        "val_model_roc_auc": float(xgb_result["val_model_roc_auc"]),
-        "test_metrics": xgb_eval["metrics"],
-        "selected_calibrator": xgb_eval["selected_calibrator"],
-        "val_policy_calibration_metrics": xgb_eval["val_policy_calibration_metrics"],
-        "artifacts": xgb_candidate_artifacts,
-        "explanation_policy": "tree_shap",
-    }
-    lgbm_candidate = {
-        "model_family": "lightgbm",
-        "model_version": MODEL_VERSIONS["reduced"],
-        "selected_candidate": lgbm_result["selected_candidate"],
-        "selected_params": lgbm_result["selected_params"],
-        "val_model_roc_auc": float(lgbm_result["val_model_roc_auc"]),
-        "test_metrics": lgbm_eval["metrics"],
-        "selected_calibrator": lgbm_eval["selected_calibrator"],
-        "val_policy_calibration_metrics": lgbm_eval["val_policy_calibration_metrics"],
-        "artifacts": lgbm_candidate_artifacts,
-        "explanation_policy": "tree_shap",
-    }
-    weighted_candidate = {
-        "model_family": "weighted_blend",
-        "model_version": REDUCED_WEIGHTED_BLEND_MODEL_VERSION,
-        "blend_method": "weighted_average",
-        "weights": {
-            "xgboost": float(weighted["weight_xgb"]),
-            "lightgbm": float(weighted["weight_lgbm"]),
-        },
-        "val_model_roc_auc": float(weighted["val_model_roc_auc"]),
-        "test_metrics": weighted_eval["metrics"],
-        "selected_calibrator": weighted_eval["selected_calibrator"],
-        "val_policy_calibration_metrics": weighted_eval["val_policy_calibration_metrics"],
-        "component_selection": {
-            "xgboost": {
-                "candidate": xgb_result["selected_candidate"],
-                "params": xgb_result["selected_params"],
-            },
-            "lightgbm": {
-                "candidate": lgbm_result["selected_candidate"],
-                "params": lgbm_result["selected_params"],
-            },
-        },
-        "artifacts": weighted_candidate_artifacts,
-        "explanation_policy": weighted_explainer.explanation_policy,
-    }
-
-    candidates = {
-        "xgboost_reduced": xgb_candidate,
-        "lightgbm_reduced": lgbm_candidate,
-        "weighted_blend_reduced": weighted_candidate,
-    }
-    selected_candidate_name, selected_candidate_payload = max(
-        candidates.items(),
-        key=lambda item: item[1]["val_model_roc_auc"],
-    )
-    if selected_candidate_name == "weighted_blend_reduced":
-        selected_model = weighted_model
-        selected_calibrator = weighted_eval["calibrator"]
-        selected_explainer = weighted_explainer
-        selected_metrics = weighted_eval["metrics"]
-        selected_model_family = "weighted_blend"
-        selected_model_version = REDUCED_WEIGHTED_BLEND_MODEL_VERSION
-    elif selected_candidate_name == "lightgbm_reduced":
-        selected_model = lgbm_result["model"]
-        selected_calibrator = lgbm_eval["calibrator"]
-        selected_explainer = lgbm_explainer
-        selected_metrics = lgbm_eval["metrics"]
-        selected_model_family = "lightgbm"
-        selected_model_version = MODEL_VERSIONS["reduced"]
-    else:
-        selected_model = xgb_result["model"]
-        selected_calibrator = xgb_eval["calibrator"]
-        selected_explainer = xgb_explainer
-        selected_metrics = xgb_eval["metrics"]
-        selected_model_family = "xgboost"
-        selected_model_version = MODEL_VERSIONS["reduced"]
-
-    selected_runtime_artifacts = _persist_runtime_bundle(
-        artifact_dir,
-        "reduced",
-        model=selected_model,
-        calibrator=selected_calibrator,
-        explainer=selected_explainer,
-    )
-
-    runtime_metadata = {
-        "processed_manifest_fingerprint": processed_manifest_fingerprint,
-        "feature_scope": "REDUCED_APPLICATION_ONLY",
-        "model_version": selected_model_version,
-        "selected_runtime_candidate": selected_candidate_name,
-        "selected_runtime_model_family": selected_model_family,
-        "selected_runtime_artifacts": selected_runtime_artifacts,
-        "candidates": candidates,
-    }
-    metadata_path = _write_json_artifact(
-        artifact_dir,
-        REDUCED_WEIGHTED_BLEND_METADATA_FILENAME,
-        runtime_metadata,
-    )
-
-    return {
-        "model": selected_model,
-        "calibrator": selected_calibrator,
-        "metrics": selected_metrics,
-        "selected_candidate": selected_candidate_name,
-        "selected_params": selected_candidate_payload.get("selected_params", {}),
-        "selected_model_family": selected_model_family,
-        "selected_model_version": selected_model_version,
-        "val_model_roc_auc": float(selected_candidate_payload["val_model_roc_auc"]),
-        "selected_calibrator": selected_candidate_payload["selected_calibrator"],
-        "val_policy_calibration_metrics": selected_candidate_payload["val_policy_calibration_metrics"],
-        "artifacts": selected_runtime_artifacts,
-        "blend_metadata_path": metadata_path,
-        "candidates": candidates,
-    }
 
 
 def _train_full_runtime_candidate(
@@ -1578,7 +1312,8 @@ def train_models(
         full_feature_view=full_feature_view,
         processed_manifest_fingerprint=processed_manifest_fingerprint,
     )
-    reduced_result = _train_reduced_runtime_candidate(
+    reduced_result = _train_tier_model(
+        "REDUCED",
         features["train_reduced"],
         y_train,
         features["val_model_reduced"],
@@ -1588,7 +1323,6 @@ def train_models(
         features["test_reduced"],
         y_test,
         artifact_dir,
-        processed_manifest_fingerprint=processed_manifest_fingerprint,
     )
 
     joblib.dump(False, _artifact_path(artifact_dir, FAIRNESS_RESULT_FILENAME))
@@ -1601,7 +1335,7 @@ def train_models(
         "deployed_model_version": full_result["selected_model_version"],
         "full_model_version": full_result["selected_model_version"],
         "full_xgboost_fallback_model_version": MODEL_VERSIONS["full"],
-        "reduced_model_version": reduced_result["selected_model_version"],
+        "reduced_model_version": MODEL_VERSIONS["reduced"],
         "metrics": full_result["metrics"],
         "reduced_metrics": reduced_result["metrics"],
         "sample_counts": {
@@ -1640,8 +1374,8 @@ def train_models(
                 },
             },
             "REDUCED": {
-                "model_family": reduced_result["selected_model_family"],
-                "model_version": reduced_result["selected_model_version"],
+                "model_family": "xgboost",
+                "model_version": MODEL_VERSIONS["reduced"],
                 "feature_count": int(len(features["reduced_builder"].encoded_columns_)),
                 "metrics": reduced_result["metrics"],
                 "selection": {
@@ -1651,13 +1385,11 @@ def train_models(
                     "calibrator": reduced_result["selected_calibrator"],
                     "val_policy_calibration_metrics": reduced_result["val_policy_calibration_metrics"],
                 },
-                "candidates": reduced_result["candidates"],
                 "artifacts": {
                     "builder": _builder_artifact_path(artifact_dir, "REDUCED"),
-                    "model": reduced_result["artifacts"]["model"],
-                    "calibrator": reduced_result["artifacts"]["calibrator"],
-                    "explainer": reduced_result["artifacts"]["explainer"],
-                    "runtime_metadata": reduced_result["blend_metadata_path"],
+                    "model": _artifact_path(artifact_dir, "reduced_model.joblib"),
+                    "calibrator": _artifact_path(artifact_dir, "reduced_calibrator.joblib"),
+                    "explainer": _artifact_path(artifact_dir, "reduced_shap_explainer.joblib"),
                 },
             },
         },
@@ -1675,7 +1407,7 @@ def train_models(
         "notes": [
             "Synthetic fallback is used when local processed/raw data artifacts are unavailable.",
             "FULL trains an XGBoost fallback candidate and a deployable weighted XGBoost+LightGBM blend candidate under the same processed lineage.",
-            "REDUCED is tuned as an application-only tier and now evaluates XGBoost, LightGBM, and a weighted blend on the reduced feature space.",
+            "REDUCED remains an XGBoost-only single-model tier in this workflow.",
             "Validation model split is used for runtime-candidate selection; validation policy split is used for probability calibration; test is confirmation only.",
             "Weighted blend explanations use a weighted component Tree SHAP approximation for stable runtime top-feature reasons.",
             "Module 3 writes model_fairness_audit_passed.joblib as a False placeholder. Module 4 owns the final overwrite.",
