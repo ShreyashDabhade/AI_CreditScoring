@@ -11,6 +11,8 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 from jinja2 import ChoiceLoader, FileSystemLoader
 import pandas as pd
 
+from src.chatbot import chat as chatbot_chat, is_gemini_available
+
 from src.api import determine_coverage_tier, score_request, validate_payload
 from src.api.app import RUNTIME_EXTENSION_KEY, _build_demo_config, _build_demo_seed_payload, create_app
 from src.db_manager import (
@@ -1340,6 +1342,37 @@ def _install_ui(app: Flask) -> None:
         endpoint="ui_artifact",
         view_func=ui_artifact,
     )
+
+    # ── Chatbot API ──────────────────────────────────────────────────
+
+    def api_chat_health():
+        return jsonify({"status": "ok", "gemini_available": is_gemini_available()})
+
+    def api_chat():
+        try:
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify({"error": "bad_request", "message": "JSON payload required"}), 400
+
+            message = str(payload.get("message", "")).strip()
+            if not message:
+                return jsonify({"error": "bad_request", "message": "message is required"}), 400
+
+            ctx = payload.get("context", {}) if isinstance(payload.get("context"), dict) else {}
+            result = chatbot_chat(
+                message=message,
+                score_data=ctx.get("score_data"),
+                shap_values=ctx.get("shap_values"),
+                page_context=ctx.get("page_context"),
+                conversation_history=payload.get("history", []) if isinstance(payload.get("history"), list) else [],
+            )
+            return jsonify(result)
+        except Exception as exc:
+            app.logger.exception("Chat endpoint error")
+            return jsonify({"error": "internal_error", "message": str(exc)}), 500
+
+    app.add_url_rule("/api/chat/health", endpoint="api_chat_health", view_func=api_chat_health)
+    app.add_url_rule("/api/chat", endpoint="api_chat", view_func=api_chat, methods=["POST"])
 
 
 app = create_app(

@@ -10,3 +10,4 @@ matplotlib==3.8.4
 seaborn==0.13.2
 gunicorn==21.2.0
 pytest==8.1.1
+google-generativeai>=0.3.0

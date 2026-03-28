@@ -1,0 +1,83 @@
+<!-- MasterMind AI Chatbot Widget -->
+<div class="chat-widget" id="chat-widget" data-state="collapsed">
+    <button class="chat-toggle" id="chat-toggle" aria-label="Open credit advisor chat">
+        <span class="chat-toggle-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+            </svg>
+        </span>
+        <span class="chat-toggle-label">AI Credit Advisor</span>
+        <span class="chat-toggle-pulse"></span>
+    </button>
+
+    <div class="chat-panel" id="chat-panel">
+        <div class="chat-header">
+            <div class="chat-header-info">
+                <div class="chat-avatar chat-avatar-bot">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h3 class="chat-title">MasterMind Credit Advisor</h3>
+                    <p class="chat-subtitle" id="chat-status">
+                        <span class="chat-status-dot"></span>
+                        Powered by AI
+                    </p>
+                </div>
+            </div>
+            <button class="chat-close" id="chat-close" aria-label="Close chat">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+
+        <div class="chat-messages" id="chat-messages">
+            <div class="chat-message chat-message-bot">
+                <div class="chat-message-avatar">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                </div>
+                <div class="chat-message-content">
+                    <p>Welcome to MasterMind AI Credit Advisor! 👋</p>
+                    <p>I can help you understand credit scores, explain risk factors, and guide you toward better financial inclusion.</p>
+                    <p><strong>Try asking:</strong></p>
+                    <ul>
+                        <li>"Why is my score what it is?"</li>
+                        <li>"How can I improve my creditworthiness?"</li>
+                        <li>"What does this decision mean?"</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-typing" id="chat-typing" style="display: none;">
+            <div class="chat-message-avatar">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            </div>
+            <div class="chat-typing-dots">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+
+        <form class="chat-input-form" id="chat-form">
+            <div class="chat-input-wrapper">
+                <input
+                    type="text"
+                    id="chat-input"
+                    class="chat-input"
+                    placeholder="Ask about your credit score..."
+                    autocomplete="off"
+                    maxlength="500"
+                />
+                <button type="submit" class="chat-send" id="chat-send" aria-label="Send message">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
+                </button>
+            </div>
+            <p class="chat-disclaimer">AI-powered responses. Not financial advice.</p>
+        </form>
+    </div>
+</div>
