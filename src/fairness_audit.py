@@ -191,9 +191,9 @@ def compute_fairness_metrics(
                 "eod": np.nan,
                 "brier_ratio": np.nan,
                 "evaluable": False,
-                "di_pass": np.nan,
-                "eod_pass": np.nan,
-                "brier_pass": np.nan,
+                "di_pass": None,
+                "eod_pass": None,
+                "brier_pass": None,
             })
             continue
 
@@ -215,9 +215,9 @@ def compute_fairness_metrics(
             "eod": np.nan,
             "brier_ratio": np.nan,
             "evaluable": True,
-            "di_pass": np.nan,
-            "eod_pass": np.nan,
-            "brier_pass": np.nan,
+            "di_pass": None,
+            "eod_pass": None,
+            "brier_pass": None,
         })
 
     result = pd.DataFrame(rows)

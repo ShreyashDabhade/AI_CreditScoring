@@ -99,6 +99,57 @@ class DatasetBundle:
     uses_flattened_full_input: bool = False
 
 
+def _concat_split_frames(*frames: pd.DataFrame) -> pd.DataFrame:
+    return pd.concat([frame.reset_index(drop=True) for frame in frames], ignore_index=True)
+
+
+def _build_training_regime_bundle(
+    bundle: DatasetBundle,
+    training_regime: str = "train_only",
+) -> tuple[DatasetBundle, dict[str, Any]]:
+    """Return an experiment bundle for a requested offline training regime.
+
+    The `train_plus_val_policy` regime consumes the calibration split into the
+    model-fitting pool, so `val_model` becomes the last non-test holdout for
+    both candidate comparison and calibration in that offline-only setting.
+    """
+    if training_regime == "train_only":
+        return bundle, {
+            "training_regime": "train_only",
+            "train_split_sources": ["train"],
+            "selection_split": "val_model",
+            "calibration_split": "val_policy",
+            "test_split": "test",
+            "merged_train_rows": int(len(bundle.train)),
+        }
+
+    if training_regime == "train_plus_val_policy":
+        merged_train = _concat_split_frames(bundle.train, bundle.val_policy)
+        regime_bundle = DatasetBundle(
+            mode=f"{bundle.mode}:{training_regime}",
+            train=merged_train,
+            val_model=bundle.val_model.reset_index(drop=True).copy(),
+            val_policy=bundle.val_model.reset_index(drop=True).copy(),
+            test=bundle.test.reset_index(drop=True).copy(),
+            raw_dir=bundle.raw_dir,
+            uses_flattened_full_input=bundle.uses_flattened_full_input,
+        )
+        return regime_bundle, {
+            "training_regime": "train_plus_val_policy",
+            "train_split_sources": ["train", "val_policy"],
+            "selection_split": "val_model",
+            "calibration_split": "val_model",
+            "test_split": "test",
+            "merged_train_rows": int(len(merged_train)),
+            "notes": [
+                "val_policy is intentionally merged into the fitting pool for this offline-only regime.",
+                "val_model becomes the last non-test holdout for both candidate comparison and calibration.",
+            ],
+        }
+
+    raise ValueError(f"Unsupported training regime: {training_regime}")
+
+
 def decision_from_pd(probability_of_default: float) -> str:
     if probability_of_default < APPROVE_THRESHOLD:
         return "APPROVE"
@@ -1500,4 +1551,3 @@ if __name__ == "__main__":
     print(_format_metric_line("FULL", report["metrics"]))
     print(_format_metric_line("REDUCED", report["reduced_metrics"]))
     print(f"Report written to: {report['report_path']}")
-

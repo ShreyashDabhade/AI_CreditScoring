@@ -34,6 +34,7 @@ class CalibrationStrategySpec:
     description: str
     group_column: str | None = None
     allowed_groups: tuple[str, ...] | None = None
+    target_selection_policy: str | None = None
 
 
 def _predict_raw_pd(model: Any, X: pd.DataFrame) -> np.ndarray:
@@ -261,17 +262,80 @@ def _strategy_specs() -> list[CalibrationStrategySpec]:
             group_column="FAIR_GROUP_PRIMARY",
         ),
         CalibrationStrategySpec(
-            name="income_tertile_aware",
-            description="Income-tertile-specific calibrators with global fallback for the cleaned secondary family.",
-            group_column="FAIR_GROUP_SECONDARY",
-        ),
-        CalibrationStrategySpec(
-            name="high_children_override",
-            description="Targeted subgroup-aware calibrator for CHILDREN_BIN=2_PLUS with global fallback elsewhere.",
-            group_column="CHILDREN_BIN",
-            allowed_groups=("2_PLUS",),
+            name="targeted_worst_primary",
+            description="Global calibrator plus a targeted override for the worst support-stable primary subgroup.",
+            group_column="FAIR_GROUP_PRIMARY",
+            target_selection_policy="worst_primary_abs_gap",
         ),
     ]
+
+
+def _select_target_groups(
+    spec: CalibrationStrategySpec,
+    *,
+    y_true: np.ndarray,
+    raw_pd: np.ndarray,
+    groups: pd.Series,
+) -> tuple[tuple[str, ...] | None, dict[str, Any] | None]:
+    if spec.allowed_groups is not None:
+        return spec.allowed_groups, {
+            "selection_policy": "explicit",
+            "target_groups": list(spec.allowed_groups),
+        }
+    if spec.target_selection_policy != "worst_primary_abs_gap":
+        return None, None
+
+    global_calibrator, global_name, global_fit_metrics = _select_calibrator(y_true, raw_pd)
+    calibrated = np.asarray(global_calibrator.predict(raw_pd), dtype=float)
+    frame = pd.DataFrame(
+        {
+            "group": groups.astype(str).reset_index(drop=True),
+            "TARGET": np.asarray(y_true, dtype=int).reshape(-1),
+            "CALIBRATED_PD": calibrated,
+        }
+    )
+    support = (
+        frame.groupby("group")["TARGET"]
+        .agg(n="size", defaults="sum")
+        .reset_index()
+    )
+    support = support[
+        (support["n"] >= GROUP_CALIBRATION_MIN_N)
+        & (support["defaults"] >= GROUP_CALIBRATION_MIN_DEFAULTS)
+        & (support["defaults"] < support["n"])
+    ]
+    if support.empty:
+        return None, {
+            "selection_policy": spec.target_selection_policy,
+            "target_groups": [],
+            "global_calibrator": global_name,
+            "global_fit_metrics": global_fit_metrics,
+            "reason": "no_support_stable_primary_group",
+        }
+
+    summary = pd.DataFrame(
+        _summarize_group_calibration(
+            frame.rename(columns={"group": "FAIR_GROUP_PRIMARY"}),
+            "FAIR_GROUP_PRIMARY",
+            calibrated,
+        )
+    )
+    ranking = support.merge(summary, left_on="group", right_on="group", how="left")
+    ranking = ranking.sort_values(
+        ["abs_gap", "brier_score", "defaults", "n_x", "group"],
+        ascending=[False, False, False, False, True],
+    ).reset_index(drop=True)
+    target_group = str(ranking.iloc[0]["group"])
+    return (target_group,), {
+        "selection_policy": spec.target_selection_policy,
+        "target_groups": [target_group],
+        "ranking_table": _jsonable_records(ranking),
+        "global_calibrator": global_name,
+        "global_fit_metrics": {
+            "roc_auc": float(global_fit_metrics["roc_auc"]),
+            "brier_score": float(global_fit_metrics["brier_score"]),
+        },
+    }
 
 
 def _evaluate_strategy(
@@ -300,13 +364,19 @@ def _evaluate_strategy(
             },
         }
     else:
+        allowed_groups, selection_details = _select_target_groups(
+            spec,
+            y_true=y_val_policy,
+            raw_pd=val_policy_raw_pd,
+            groups=val_policy_groups[spec.group_column],
+        )
         grouped = _fit_grouped_calibration_strategy(
             y_val_policy,
             val_policy_raw_pd,
             val_policy_groups[spec.group_column],
             min_n=GROUP_CALIBRATION_MIN_N,
             min_defaults=GROUP_CALIBRATION_MIN_DEFAULTS,
-            allowed_groups=spec.allowed_groups,
+            allowed_groups=allowed_groups,
         )
         val_policy_calibrated = _apply_grouped_calibration(grouped, val_policy_raw_pd, val_policy_groups[spec.group_column])
         test_calibrated = _apply_grouped_calibration(grouped, test_raw_pd, test_groups[spec.group_column])
@@ -315,11 +385,13 @@ def _evaluate_strategy(
             "global_calibrator_fit_metrics": grouped["global_fit_metrics"],
             "global_fallback_only": False,
             "group_column": spec.group_column,
-            "targeted_groups": list(spec.allowed_groups) if spec.allowed_groups is not None else None,
+            "targeted_groups": list(allowed_groups) if allowed_groups is not None else None,
             "fitted_groups": grouped["fitted_groups"],
             "fallback_groups": grouped["fallback_groups"],
             "support_thresholds": grouped["support_thresholds"],
         }
+        if selection_details is not None:
+            details["target_selection"] = selection_details
 
     result = {
         "description": spec.description,

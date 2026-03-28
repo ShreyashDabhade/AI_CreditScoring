@@ -14,6 +14,7 @@ from src.models.train import (
     DEFAULT_FULL_FEATURE_VIEW,
     _artifact_path,
     _build_features,
+    _build_training_regime_bundle,
     _candidate_lgbm_params,
     _candidate_model_params,
     _collect_metrics,
@@ -29,8 +30,9 @@ from src.models.train import (
 )
 
 FAIRNESS_AWARE_MODELING_REPORT_FILENAME = "fairness_aware_modeling_experiment_report.json"
+REGION_BALANCE_IPW_CAP = 3.0
 REGION_BALANCE_SHRINK = 0.50
-REGION3_DEFAULT_BOOST = 1.50
+WORST_REGION_DEFAULT_BOOST = 1.50
 APPROVE_THRESHOLD = 0.15
 DECLINE_THRESHOLD = 0.35
 
@@ -72,6 +74,14 @@ def _jsonable_records(df: pd.DataFrame) -> list[dict[str, Any]]:
 def _strategy_specs() -> list[FairnessInterventionSpec]:
     return [
         FairnessInterventionSpec(
+            name="region_balanced_ipw",
+            description=(
+                "Full-strength inverse-support region balancing with a capped IPW profile "
+                "to preserve the existing aggressive fairness-aware retraining reference."
+            ),
+            weighting_strategy="region_balanced_ipw",
+        ),
+        FairnessInterventionSpec(
             name="region_balanced_mild",
             description=(
                 "Half-strength region-balance weighting using shrunk inverse-support "
@@ -80,12 +90,12 @@ def _strategy_specs() -> list[FairnessInterventionSpec]:
             weighting_strategy="region_balanced_mild",
         ),
         FairnessInterventionSpec(
-            name="region3_default_boost",
+            name="worst_region_default_boost",
             description=(
-                "Targeted weight boost for REGION_3 default cases to reduce underprediction "
-                "pressure in the worst primary-group region."
+                "Targeted weight boost for default cases in the worst default-heavy primary-region "
+                "group identified from the training regime."
             ),
-            weighting_strategy="region3_default_boost",
+            weighting_strategy="worst_region_default_boost",
         ),
     ]
 
@@ -132,24 +142,84 @@ def _region_balance_weights(train_groups: pd.DataFrame) -> tuple[np.ndarray, dic
     return normalized, details
 
 
-def _region3_default_boost_weights(
+def _region_balance_ipw_weights(train_groups: pd.DataFrame) -> tuple[np.ndarray, dict[str, Any]]:
+    region_counts = train_groups["FAIR_GROUP_PRIMARY"].value_counts().sort_index()
+    target_count = float(region_counts.mean())
+    raw_group_weights = {
+        group: float(min(target_count / count, REGION_BALANCE_IPW_CAP))
+        for group, count in region_counts.items()
+    }
+    weights = train_groups["FAIR_GROUP_PRIMARY"].map(raw_group_weights).astype(float).to_numpy()
+    normalized = _normalize_sample_weights(weights)
+    effective_weights = (
+        pd.DataFrame(
+            {
+                "region": train_groups["FAIR_GROUP_PRIMARY"].astype(str).to_numpy(),
+                "weight": normalized,
+            }
+        )
+        .groupby("region")["weight"]
+        .mean()
+        .to_dict()
+    )
+    details = {
+        "strategy": "region_balanced_ipw",
+        "region_counts": {str(group): int(count) for group, count in region_counts.items()},
+        "raw_group_weights": {str(group): float(weight) for group, weight in raw_group_weights.items()},
+        "effective_group_weights": {str(group): float(weight) for group, weight in effective_weights.items()},
+        "cap": float(REGION_BALANCE_IPW_CAP),
+        "normalization": "sample weights normalized to mean 1.0 across train rows",
+    }
+    return normalized, details
+
+
+def _identify_worst_region_group(
+    train_groups: pd.DataFrame,
+    y_train: np.ndarray,
+) -> tuple[str, dict[str, Any]]:
+    frame = pd.DataFrame(
+        {
+            "region": train_groups["FAIR_GROUP_PRIMARY"].astype(str).to_numpy(),
+            "TARGET": np.asarray(y_train, dtype=int).reshape(-1),
+        }
+    )
+    stats = (
+        frame.groupby("region")["TARGET"]
+        .agg(n="size", defaults="sum", default_rate="mean")
+        .reset_index()
+        .sort_values(
+            ["default_rate", "defaults", "n", "region"],
+            ascending=[False, False, False, True],
+        )
+        .reset_index(drop=True)
+    )
+    target_group = str(stats.iloc[0]["region"])
+    return target_group, {
+        "selected_group": target_group,
+        "ranking_table": _jsonable_records(stats),
+    }
+
+
+def _worst_region_default_boost_weights(
     train_groups: pd.DataFrame,
     y_train: np.ndarray,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     groups = train_groups["FAIR_GROUP_PRIMARY"].astype(str)
     target = np.asarray(y_train, dtype=int).reshape(-1)
-    mask = (groups == "REGION_3").to_numpy() & (target == 1)
+    target_group, selection = _identify_worst_region_group(train_groups, y_train)
+    mask = (groups == target_group).to_numpy() & (target == 1)
     weights = np.ones(len(train_groups), dtype=float)
-    weights[mask] = REGION3_DEFAULT_BOOST
+    weights[mask] = WORST_REGION_DEFAULT_BOOST
     normalized = _normalize_sample_weights(weights)
     details = {
-        "strategy": "region3_default_boost",
-        "boosted_group": "REGION_3",
+        "strategy": "worst_region_default_boost",
+        "boosted_group": target_group,
         "boosted_target_value": 1,
-        "boost_multiplier": float(REGION3_DEFAULT_BOOST),
+        "boost_multiplier": float(WORST_REGION_DEFAULT_BOOST),
         "boosted_rows": int(mask.sum()),
         "normalization": "sample weights normalized to mean 1.0 across train rows",
     }
+    details.update(selection)
     return normalized, details
 
 
@@ -158,10 +228,12 @@ def _build_train_weights(
     train_groups: pd.DataFrame,
     y_train: np.ndarray,
 ) -> tuple[np.ndarray, dict[str, Any]]:
+    if spec.weighting_strategy == "region_balanced_ipw":
+        return _region_balance_ipw_weights(train_groups)
     if spec.weighting_strategy == "region_balanced_mild":
         return _region_balance_weights(train_groups)
-    if spec.weighting_strategy == "region3_default_boost":
-        return _region3_default_boost_weights(train_groups, y_train)
+    if spec.weighting_strategy == "worst_region_default_boost":
+        return _worst_region_default_boost_weights(train_groups, y_train)
     raise ValueError(f"Unsupported weighting strategy: {spec.weighting_strategy}")
 
 
@@ -371,6 +443,107 @@ def _evaluate_fairness_aware_variant(
     }
 
 
+def _evaluate_uniform_baseline(
+    *,
+    bundle: Any,
+    features: dict[str, Any],
+) -> dict[str, Any]:
+    weights = np.ones(len(bundle.train), dtype=float)
+    return _evaluate_fairness_aware_variant(
+        FairnessInterventionSpec(
+            name="uniform_baseline",
+            description="Unweighted retraining baseline for the current training regime.",
+            weighting_strategy="uniform_baseline",
+        ),
+        bundle=bundle,
+        features=features,
+        train_weights=weights,
+        weighting_details={
+            "strategy": "uniform_baseline",
+            "normalization": "all train rows receive unit weight",
+        },
+    )
+
+
+def _summarize_regime_delta(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    baseline_test = baseline["weighted_blend"]["test_metrics"]
+    candidate_test = candidate["weighted_blend"]["test_metrics"]
+    baseline_primary = baseline["fairness"]["families"]["PRIMARY"]
+    candidate_primary = candidate["fairness"]["families"]["PRIMARY"]
+    return {
+        "test_auc_delta": float(candidate_test["roc_auc"] - baseline_test["roc_auc"]),
+        "test_brier_delta": float(candidate_test["brier_score"] - baseline_test["brier_score"]),
+        "primary_di_min_delta": float(
+            (candidate_primary["di_min"] or 0.0) - (baseline_primary["di_min"] or 0.0)
+        ),
+        "primary_eod_gap_delta": float(
+            (candidate_primary["eod_gap"] or 0.0) - (baseline_primary["eod_gap"] or 0.0)
+        ),
+        "primary_brier_ratio_delta": float(
+            (candidate_primary["brier_ratio"] or 0.0) - (baseline_primary["brier_ratio"] or 0.0)
+        ),
+        "primary_pass_vector": {
+            "baseline": {
+                key: bool(baseline_primary[key])
+                for key in ["di_pass", "eod_pass", "brier_pass"]
+            },
+            "candidate": {
+                key: bool(candidate_primary[key])
+                for key in ["di_pass", "eod_pass", "brier_pass"]
+            },
+        },
+    }
+
+
+def _run_training_regime(
+    bundle: Any,
+    *,
+    artifact_dir: str,
+    processed_dir: str,
+    full_feature_view: str,
+    training_regime: str,
+) -> dict[str, Any]:
+    regime_bundle, regime_details = _build_training_regime_bundle(bundle, training_regime)
+    train_groups = _prepare_group_frame(regime_bundle.train, regime_bundle.train)
+    y_train = regime_bundle.train["TARGET"].to_numpy(dtype=int)
+
+    with tempfile.TemporaryDirectory(prefix=f"fairness_aware_{training_regime}_") as temp_root:
+        features = _build_features(
+            regime_bundle,
+            temp_root,
+            processed_dir,
+            full_feature_view=full_feature_view,
+        )
+        baseline = _evaluate_uniform_baseline(bundle=regime_bundle, features=features)
+        experiments: dict[str, Any] = {}
+        for spec in _strategy_specs():
+            weights, details = _build_train_weights(spec, train_groups, y_train)
+            variant = _evaluate_fairness_aware_variant(
+                spec,
+                bundle=regime_bundle,
+                features=features,
+                train_weights=weights,
+                weighting_details=details,
+            )
+            variant["delta_vs_regime_baseline"] = _summarize_regime_delta(baseline, variant)
+            experiments[spec.name] = variant
+
+    return {
+        "regime_details": regime_details,
+        "sample_counts": {
+            "train": int(len(regime_bundle.train)),
+            "val_model": int(len(regime_bundle.val_model)),
+            "calibration_holdout": int(len(regime_bundle.val_policy)),
+            "test": int(len(regime_bundle.test)),
+        },
+        "baseline_retrain": baseline,
+        "experiments": experiments,
+    }
+
+
 def _baseline_runtime_summary(bundle: Any, artifact_dir: str, processed_dir: str) -> dict[str, Any]:
     artifacts = load_artifacts(artifact_dir=artifact_dir, processed_dir=processed_dir, strict_artifacts=True)
     report = artifacts.get("reproducibility_report", {})
@@ -412,37 +585,40 @@ def run_fairness_aware_modeling_experiments(
 
     bundle = _load_real_bundle(processed_dir, raw_dir)
     baseline = _baseline_runtime_summary(bundle, artifact_dir, processed_dir)
-    train_groups = _prepare_group_frame(bundle.train, bundle.train)
     full_feature_view = baseline["feature_view"] or DEFAULT_FULL_FEATURE_VIEW
-
-    experiments: dict[str, Any] = {}
-    with tempfile.TemporaryDirectory(prefix="fairness_aware_build_") as temp_root:
-        features = _build_features(
+    training_regimes = {
+        "train_only": _run_training_regime(
             bundle,
-            temp_root,
-            processed_dir,
+            artifact_dir=artifact_dir,
+            processed_dir=processed_dir,
             full_feature_view=full_feature_view,
-        )
-        y_train = bundle.train["TARGET"].to_numpy(dtype=int)
-        for spec in _strategy_specs():
-            weights, details = _build_train_weights(spec, train_groups, y_train)
-            experiments[spec.name] = _evaluate_fairness_aware_variant(
-                spec,
-                bundle=bundle,
-                features=features,
-                train_weights=weights,
-                weighting_details=details,
-            )
+            training_regime="train_only",
+        ),
+        "train_plus_val_policy": _run_training_regime(
+            bundle,
+            artifact_dir=artifact_dir,
+            processed_dir=processed_dir,
+            full_feature_view=full_feature_view,
+            training_regime="train_plus_val_policy",
+        ),
+    }
+    merged_baseline = training_regimes["train_plus_val_policy"]["baseline_retrain"]
+    canonical_baseline = training_regimes["train_only"]["baseline_retrain"]
+    training_regimes["train_plus_val_policy"]["delta_vs_train_only_baseline"] = _summarize_regime_delta(
+        canonical_baseline,
+        merged_baseline,
+    )
 
     report = {
         "mode": bundle.mode,
         "offline_only": True,
         "processed_manifest_fingerprint": _processed_manifest_fingerprint(processed_dir),
         "baseline_runtime": baseline,
-        "experiments": experiments,
+        "training_regimes": training_regimes,
         "notes": [
             "Current runtime artifacts and API behavior remain unchanged.",
-            "val_model is used for candidate comparison, val_policy for calibration, and test for final confirmation only.",
+            "train_only keeps the canonical val_model -> val_policy -> test evaluation order.",
+            "train_plus_val_policy merges val_policy into the fitting pool and reuses val_model as the last non-test selection/calibration holdout.",
             "Interventions are limited to modest region-aware training weights on the existing FULL weighted-blend pipeline.",
         ],
     }
@@ -468,16 +644,28 @@ if __name__ == "__main__":
                         for key in ["di_pass", "eod_pass", "brier_pass", "di_min", "eod_gap", "brier_ratio"]
                     },
                 },
-                "experiments": {
-                    name: {
-                        "val_model_roc_auc": payload["weighted_blend"]["val_model_roc_auc"],
-                        "test_metrics": payload["weighted_blend"]["test_metrics"],
-                        "primary_family": {
-                            key: payload["fairness"]["families"]["PRIMARY"][key]
-                            for key in ["di_pass", "eod_pass", "brier_pass", "di_min", "eod_gap", "brier_ratio"]
+                "training_regimes": {
+                    regime_name: {
+                        "baseline_retrain": {
+                            "test_metrics": regime_payload["baseline_retrain"]["weighted_blend"]["test_metrics"],
+                            "primary_family": {
+                                key: regime_payload["baseline_retrain"]["fairness"]["families"]["PRIMARY"][key]
+                                for key in ["di_pass", "eod_pass", "brier_pass", "di_min", "eod_gap", "brier_ratio"]
+                            },
+                        },
+                        "experiments": {
+                            name: {
+                                "val_model_roc_auc": payload["weighted_blend"]["val_model_roc_auc"],
+                                "test_metrics": payload["weighted_blend"]["test_metrics"],
+                                "primary_family": {
+                                    key: payload["fairness"]["families"]["PRIMARY"][key]
+                                    for key in ["di_pass", "eod_pass", "brier_pass", "di_min", "eod_gap", "brier_ratio"]
+                                },
+                            }
+                            for name, payload in regime_payload["experiments"].items()
                         },
                     }
-                    for name, payload in result["experiments"].items()
+                    for regime_name, regime_payload in result["training_regimes"].items()
                 },
             },
             indent=2,

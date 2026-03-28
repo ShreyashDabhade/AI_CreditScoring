@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -100,3 +101,194 @@ def test_full_runtime_candidate_persists_weighted_blend_metadata(tmp_path):
     assert (tmp_path / 'full_xgboost_model.joblib').exists()
     assert (tmp_path / 'full_weighted_blend_model.joblib').exists()
     assert result['selected_candidate'] in {'xgboost_full', 'weighted_blend_full'}
+
+
+def test_reduced_blend_formula_matches_weighted_average():
+    from src.models.reduced_blend import blend_prob
+
+    xgb = np.array([0.2, 0.8, 0.6])
+    lgbm = np.array([0.4, 0.1, 0.9])
+
+    blended = blend_prob(0.25, xgb, lgbm)
+
+    np.testing.assert_allclose(blended, np.array([0.35, 0.275, 0.825]))
+
+
+class _ReducedBuilderFixture:
+    encoded_columns_ = ["xgb_prob", "lgbm_prob"]
+
+    def transform(self, df):
+        return df[self.encoded_columns_].astype(float).reset_index(drop=True)
+
+
+class _ColumnProbModel:
+    def __init__(self, column_index: int):
+        self.column_index = column_index
+        self.n_features_in_ = 2
+
+    def predict_proba(self, X):
+        arr = np.asarray(X, dtype=float)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        pd_col = np.clip(arr[:, self.column_index], 0.0, 1.0)
+        return np.column_stack([1.0 - pd_col, pd_col])
+
+
+def _make_reduced_blend_bundle():
+    train = pd.DataFrame(
+        {
+            "xgb_prob": [0.12, 0.82, 0.22, 0.72, 0.35, 0.66],
+            "lgbm_prob": [0.20, 0.74, 0.30, 0.69, 0.40, 0.62],
+            "TARGET": [0, 1, 0, 1, 0, 1],
+        }
+    )
+    val_model = pd.DataFrame(
+        {
+            "xgb_prob": [0.25, 0.58, 0.45, 0.81, 0.35, 0.77],
+            "lgbm_prob": [0.10, 0.35, 0.62, 0.90, 0.30, 0.71],
+            "TARGET": [0, 0, 1, 1, 0, 1],
+        }
+    )
+    val_policy = pd.DataFrame(
+        {
+            "xgb_prob": [0.22, 0.61, 0.38, 0.84, 0.28, 0.75],
+            "lgbm_prob": [0.14, 0.40, 0.64, 0.88, 0.25, 0.70],
+            "TARGET": [0, 0, 1, 1, 0, 1],
+        }
+    )
+    test = pd.DataFrame(
+        {
+            "xgb_prob": [0.20, 0.64, 0.36, 0.79, 0.33, 0.73],
+            "lgbm_prob": [0.12, 0.39, 0.60, 0.87, 0.26, 0.69],
+            "TARGET": [0, 0, 1, 1, 0, 1],
+        }
+    )
+    return SimpleNamespace(
+        mode="real",
+        train=train,
+        val_model=val_model,
+        val_policy=val_policy,
+        test=test,
+        raw_dir="unused",
+    )
+
+
+def test_reduced_blend_experiment_persists_weight_search_results(tmp_path, monkeypatch):
+    from src.models import reduced_blend
+
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+
+    monkeypatch.setattr(reduced_blend, "_has_real_training_inputs", lambda *args, **kwargs: True)
+    monkeypatch.setattr(reduced_blend, "_load_real_bundle", lambda *args, **kwargs: _make_reduced_blend_bundle())
+    monkeypatch.setattr(
+        reduced_blend,
+        "load_artifacts",
+        lambda **kwargs: {
+            "reduced_builder": _ReducedBuilderFixture(),
+            "reduced_model": _ColumnProbModel(0),
+        },
+    )
+    monkeypatch.setattr(
+        reduced_blend,
+        "_train_best_model_family",
+        lambda *args, **kwargs: {
+            "model": _ColumnProbModel(1),
+            "selected_candidate": "stub_lgbm",
+            "selected_params": {"n_estimators": 10},
+            "val_model_roc_auc": 0.0,
+            "val_model_raw_pd": _make_reduced_blend_bundle().val_model["lgbm_prob"].to_numpy(dtype=float),
+        },
+    )
+    monkeypatch.setattr(reduced_blend, "_processed_manifest_fingerprint", lambda *args, **kwargs: "processed-xyz")
+
+    report = reduced_blend.run_reduced_blend_experiment(
+        artifact_dir=str(artifact_dir),
+        processed_dir=str(tmp_path / "processed"),
+        raw_dir=str(tmp_path / "raw"),
+    )
+
+    report_path = artifact_dir / "reduced_blend" / "reduced_blend_report.json"
+    summary_path = artifact_dir / "reduced_blend" / "reduced_blend_summary.md"
+    assert report_path.exists()
+    assert summary_path.exists()
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    weights = payload["blend_search"]["weights"]
+    assert len(weights) > 11
+    assert payload["blend_search"]["coarse_grid"] == [round(step / 10.0, 1) for step in range(11)]
+    assert payload["blend_search"]["selected_weight_xgb"] == report["blend_search"]["selected_weight_xgb"]
+    assert any(row["selection_stage"] == "refine" for row in weights)
+    assert all("test_metrics" in row for row in weights)
+
+
+def test_reduced_blend_experiment_keeps_runtime_artifacts_isolated(tmp_path, monkeypatch):
+    from src.models import reduced_blend
+
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    reduced_model_path = artifact_dir / "reduced_model.joblib"
+    reduced_calibrator_path = artifact_dir / "reduced_calibrator.joblib"
+    reduced_model_path.write_text("runtime-model-sentinel", encoding="utf-8")
+    reduced_calibrator_path.write_text("runtime-calibrator-sentinel", encoding="utf-8")
+
+    monkeypatch.setattr(reduced_blend, "_has_real_training_inputs", lambda *args, **kwargs: True)
+    monkeypatch.setattr(reduced_blend, "_load_real_bundle", lambda *args, **kwargs: _make_reduced_blend_bundle())
+    monkeypatch.setattr(
+        reduced_blend,
+        "load_artifacts",
+        lambda **kwargs: {
+            "reduced_builder": _ReducedBuilderFixture(),
+            "reduced_model": _ColumnProbModel(0),
+        },
+    )
+    monkeypatch.setattr(
+        reduced_blend,
+        "_train_best_model_family",
+        lambda *args, **kwargs: {
+            "model": _ColumnProbModel(1),
+            "selected_candidate": "stub_lgbm",
+            "selected_params": {"n_estimators": 10},
+            "val_model_roc_auc": 0.0,
+            "val_model_raw_pd": _make_reduced_blend_bundle().val_model["lgbm_prob"].to_numpy(dtype=float),
+        },
+    )
+    monkeypatch.setattr(reduced_blend, "_processed_manifest_fingerprint", lambda *args, **kwargs: "processed-xyz")
+
+    report = reduced_blend.run_reduced_blend_experiment(
+        artifact_dir=str(artifact_dir),
+        processed_dir=str(tmp_path / "processed"),
+        raw_dir=str(tmp_path / "raw"),
+    )
+
+    isolated_dir = artifact_dir / "reduced_blend"
+    assert isolated_dir.exists()
+    assert reduced_model_path.read_text(encoding="utf-8") == "runtime-model-sentinel"
+    assert reduced_calibrator_path.read_text(encoding="utf-8") == "runtime-calibrator-sentinel"
+    assert (isolated_dir / "reduced_blend_selected_model.joblib").exists()
+    assert (isolated_dir / "reduced_blend_selected_calibrator.joblib").exists()
+    assert report["runtime_unchanged"] is True
+    assert report["default_runtime_artifacts_mutated"] is False
+
+
+def test_build_training_regime_bundle_can_merge_train_and_val_policy():
+    from src.models.train import DatasetBundle, _build_training_regime_bundle
+
+    bundle = DatasetBundle(
+        mode="real",
+        train=pd.DataFrame({"feature": [1, 2], "TARGET": [0, 1]}),
+        val_model=pd.DataFrame({"feature": [3], "TARGET": [0]}),
+        val_policy=pd.DataFrame({"feature": [4, 5], "TARGET": [1, 0]}),
+        test=pd.DataFrame({"feature": [6], "TARGET": [1]}),
+        raw_dir="data/raw",
+        uses_flattened_full_input=True,
+    )
+
+    merged_bundle, details = _build_training_regime_bundle(bundle, "train_plus_val_policy")
+
+    assert len(merged_bundle.train) == 4
+    assert merged_bundle.train["feature"].tolist() == [1, 2, 4, 5]
+    assert merged_bundle.val_model["feature"].tolist() == [3]
+    assert merged_bundle.val_policy["feature"].tolist() == [3]
+    assert details["train_split_sources"] == ["train", "val_policy"]
+    assert details["calibration_split"] == "val_model"

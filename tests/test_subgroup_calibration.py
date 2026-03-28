@@ -9,8 +9,7 @@ def test_strategy_specs_cover_required_prototypes():
     assert names == [
         'global_baseline',
         'region_aware',
-        'income_tertile_aware',
-        'high_children_override',
+        'targeted_worst_primary',
     ]
 
 
@@ -70,3 +69,37 @@ def test_summarize_group_calibration_tracks_signed_gap_and_brier():
     assert lookup['G1']['brier_score'] > 0.0
     assert lookup['G2']['brier_score'] > 0.0
 
+
+def test_select_target_groups_picks_worst_supported_primary_group(monkeypatch):
+    from src.models import subgroup_calibration
+    from src.models.subgroup_calibration import _select_target_groups, CalibrationStrategySpec
+
+    monkeypatch.setattr(subgroup_calibration, 'GROUP_CALIBRATION_MIN_N', 20)
+    monkeypatch.setattr(subgroup_calibration, 'GROUP_CALIBRATION_MIN_DEFAULTS', 5)
+
+    groups = pd.Series(['REGION_1'] * 40 + ['REGION_2'] * 40 + ['REGION_3'] * 40)
+    raw_pd = np.concatenate([
+        np.full(40, 0.10),
+        np.full(40, 0.20),
+        np.full(40, 0.25),
+    ])
+    y_true = np.concatenate([
+        np.array([0] * 36 + [1] * 4),
+        np.array([0] * 30 + [1] * 10),
+        np.array([0] * 20 + [1] * 20),
+    ])
+
+    allowed, details = _select_target_groups(
+        CalibrationStrategySpec(
+            name='targeted_worst_primary',
+            description='test',
+            group_column='FAIR_GROUP_PRIMARY',
+            target_selection_policy='worst_primary_abs_gap',
+        ),
+        y_true=y_true,
+        raw_pd=raw_pd,
+        groups=groups,
+    )
+
+    assert allowed == ('REGION_3',)
+    assert details['target_groups'] == ['REGION_3']
