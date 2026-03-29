@@ -17,6 +17,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import json
 
+from configs.config import (
+    DEFAULT_SPLIT_MODE,
+    RANDOM_STATE,
+    SUPPORTED_SPLIT_MODES,
+    TEST_FRAC,
+    TRAIN_FRAC,
+    VAL_MODEL_FRAC,
+    VAL_POLICY_FRAC,
+)
 from src.runtime_verification import (
     dataframe_schema_hash,
     safe_git_commit,
@@ -87,6 +96,12 @@ RELATIVE_TIME_COLS: set[str] = {
     "DAYS_ID_PUBLISH", "DAYS_DECISION", "MONTHS_BALANCE",
     "DAYS_INSTALMENT", "DAYS_ENTRY_PAYMENT"
 }
+SPLIT_FRACTIONS: dict[str, float] = {
+    "train": TRAIN_FRAC,
+    "val_model": VAL_MODEL_FRAC,
+    "val_policy": VAL_POLICY_FRAC,
+    "test": TEST_FRAC,
+}
 
 # ================================
 # FUNCTIONS
@@ -104,6 +119,15 @@ def enforce_schema(df: pd.DataFrame, schema: dict[str, str]) -> pd.DataFrame:
         if col in df_copy.columns:
             df_copy[col] = df_copy[col].astype(np.dtype(dtype))
     return df_copy
+
+
+def prepare_application_frame(df: pd.DataFrame) -> pd.DataFrame:
+    prepared = enforce_schema(df, TRAIN_SCHEMA)
+    prepared["DAYS_EMPLOYED_ANOM"] = (
+        prepared["DAYS_EMPLOYED"] == 365243
+    ).astype("int8")
+    prepared["DAYS_EMPLOYED"] = prepared["DAYS_EMPLOYED"].replace(365243, np.nan)
+    return prepared
 
 
 # ================================
@@ -199,6 +223,80 @@ def ordered_split_60_10_10_20(df: pd.DataFrame):
     return (train, val_model, val_policy, test)
 
 
+def random_stratified_split_60_10_10_20(
+    df: pd.DataFrame,
+    *,
+    random_state: int = RANDOM_STATE,
+):
+    n_rows = len(df)
+    train_rows = int(n_rows * SPLIT_FRACTIONS["train"])
+    val_model_rows = int(n_rows * SPLIT_FRACTIONS["val_model"])
+    val_policy_rows = int(n_rows * SPLIT_FRACTIONS["val_policy"])
+    test_rows = n_rows - train_rows - val_model_rows - val_policy_rows
+
+    train, holdout = train_test_split(
+        df,
+        test_size=n_rows - train_rows,
+        stratify=df["TARGET"],
+        random_state=random_state,
+    )
+    val_model, tail = train_test_split(
+        holdout,
+        train_size=val_model_rows,
+        stratify=holdout["TARGET"],
+        random_state=random_state,
+    )
+    val_policy, test = train_test_split(
+        tail,
+        train_size=val_policy_rows,
+        test_size=test_rows,
+        stratify=tail["TARGET"],
+        random_state=random_state,
+    )
+    return (
+        train.reset_index(drop=True),
+        val_model.reset_index(drop=True),
+        val_policy.reset_index(drop=True),
+        test.reset_index(drop=True),
+    )
+
+
+def build_application_splits(
+    app_train: pd.DataFrame,
+    *,
+    split_mode: str = DEFAULT_SPLIT_MODE,
+    random_state: int = RANDOM_STATE,
+):
+    normalized_mode = str(split_mode).strip().lower()
+    if normalized_mode not in SUPPORTED_SPLIT_MODES:
+        raise ValueError(
+            f"Unsupported split_mode={split_mode!r}; expected one of {list(SUPPORTED_SPLIT_MODES)}"
+        )
+
+    if normalized_mode == "proxy_time":
+        app_sorted = proxy_recency_sort(app_train)
+        splits = ordered_split_60_10_10_20(app_sorted)
+    else:
+        splits = random_stratified_split_60_10_10_20(
+            app_train,
+            random_state=random_state,
+        )
+
+    return splits, {
+        "split_mode": normalized_mode,
+        "random_state": int(random_state),
+        "fractions": dict(SPLIT_FRACTIONS),
+        "source_dataset": "application_train.csv",
+        "stratify_column": "TARGET" if normalized_mode == "random_stratified" else None,
+    }
+
+
+def apply_income_cap(df: pd.DataFrame, income_cap: float) -> pd.DataFrame:
+    capped = df.copy()
+    capped["AMT_INCOME_TOTAL_CAPPED"] = capped["AMT_INCOME_TOTAL"].clip(upper=income_cap)
+    return capped
+
+
 def build_adversarial_dataset(train_app: pd.DataFrame, test_app: pd.DataFrame):
 
     # Step 1: Balance dataset
@@ -238,9 +336,11 @@ def _build_processed_manifest(
     val_model: pd.DataFrame,
     val_policy: pd.DataFrame,
     test: pd.DataFrame,
-    adv_train_df: pd.DataFrame,
-    adv_val_df: pd.DataFrame,
+    adv_train_df: pd.DataFrame | None,
+    adv_val_df: pd.DataFrame | None,
     income_cap: float,
+    split_mode: str,
+    random_state: int,
 ) -> dict[str, object]:
     split_verification = validate_processed_splits(
         {
@@ -248,32 +348,58 @@ def _build_processed_manifest(
             "val_model": val_model,
             "val_policy": val_policy,
             "test": test,
-        }
+        },
+        split_mode=split_mode,
     )
     git_commit = safe_git_commit(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    adversarial_enabled = adv_train_df is not None and adv_val_df is not None
+    adversarial_summary = {
+        "enabled": adversarial_enabled,
+        "diagnostic_only": adversarial_enabled,
+        "income_cap_used": float(income_cap),
+        "git_commit": git_commit,
+    }
+    if adversarial_enabled:
+        adversarial_summary.update(
+            {
+                "adv_train_rows": int(len(adv_train_df)),
+                "adv_val_rows": int(len(adv_val_df)),
+                "schema_hash": dataframe_schema_hash(adv_train_df),
+            }
+        )
+    else:
+        adversarial_summary.update(
+            {
+                "adv_train_rows": 0,
+                "adv_val_rows": 0,
+                "schema_hash": None,
+                "notes": [
+                    "application_test.csv is reserved for final inference in random_stratified competition mode.",
+                ],
+            }
+        )
     manifest = {
-        "manifest_version": 1,
+        "manifest_version": 2,
         "git_commit": git_commit,
         "application_train_cleaned_rows": int(len(train) + len(val_model) + len(val_policy) + len(test)),
         "income_cap": float(income_cap),
+        "split_mode": split_mode,
+        "random_state": int(random_state),
+        "split_fractions": dict(SPLIT_FRACTIONS),
         "split_fingerprints": split_verification["split_fingerprints"],
         "split_schema_hashes": split_verification["split_schema_hashes"],
         "split_summary": split_verification["split_summary"],
         "duplicate_summary": split_verification["duplicate_summary"],
-        "adversarial_summary": {
-            "adv_train_rows": int(len(adv_train_df)),
-            "adv_val_rows": int(len(adv_val_df)),
-            "diagnostic_only": True,
-            "income_cap_used": float(income_cap),
-            "git_commit": git_commit,
-            "schema_hash": dataframe_schema_hash(adv_train_df),
-        },
+        "adversarial_summary": adversarial_summary,
     }
     manifest["processed_manifest_fingerprint"] = sha256_json(
         {
             "manifest_version": manifest["manifest_version"],
             "application_train_cleaned_rows": manifest["application_train_cleaned_rows"],
             "income_cap": manifest["income_cap"],
+            "split_mode": manifest["split_mode"],
+            "random_state": manifest["random_state"],
+            "split_fractions": manifest["split_fractions"],
             "split_fingerprints": manifest["split_fingerprints"],
             "split_schema_hashes": manifest["split_schema_hashes"],
             "split_summary": manifest["split_summary"],
@@ -296,6 +422,12 @@ def _write_processed_manifest(path: str, manifest: dict[str, object]) -> None:
 if __name__ == "__main__":
 
     DATA_RAW_DIR = os.environ.get("DATA_RAW_DIR", "data/raw/")
+    SPLIT_MODE = os.environ.get("SPLIT_MODE", DEFAULT_SPLIT_MODE).strip().lower()
+    SPLIT_RANDOM_STATE = int(os.environ.get("SPLIT_RANDOM_STATE", str(RANDOM_STATE)))
+    DATA_QUALITY_REPORT_PATH = os.environ.get(
+        "DATA_QUALITY_REPORT_PATH",
+        "data/data_quality_report.json",
+    )
 
     filenames = [
         "application_train.csv",
@@ -307,6 +439,11 @@ if __name__ == "__main__":
         "application_test.csv"
     ]
 
+    if SPLIT_MODE not in SUPPORTED_SPLIT_MODES:
+        raise ValueError(
+            f"Unsupported SPLIT_MODE={SPLIT_MODE!r}; expected one of {list(SUPPORTED_SPLIT_MODES)}"
+        )
+
     # Load datasets
     app_train = pd.read_csv(os.path.join(DATA_RAW_DIR, filenames[0]))
     bureau = pd.read_csv(os.path.join(DATA_RAW_DIR, filenames[1]))
@@ -314,22 +451,17 @@ if __name__ == "__main__":
     inst = pd.read_csv(os.path.join(DATA_RAW_DIR, filenames[3]))
     pos_cash = pd.read_csv(os.path.join(DATA_RAW_DIR, filenames[4]))
     cc = pd.read_csv(os.path.join(DATA_RAW_DIR, filenames[5]))
-    app_test = pd.read_csv(os.path.join(DATA_RAW_DIR, filenames[6]))
+    app_test = None
+    if SPLIT_MODE == "proxy_time":
+        app_test = pd.read_csv(os.path.join(DATA_RAW_DIR, filenames[6]))
 
     # Enforce table whitelist
-    enforce_locked_tables(filenames)
+    enforce_locked_tables(filenames if app_test is not None else filenames[:-1])
 
     # Apply schema
-    app_train = enforce_schema(app_train, TRAIN_SCHEMA)
-
-    # ================================
-    # TRAP A — DAYS_EMPLOYED FIX
-    # ================================
-    app_train["DAYS_EMPLOYED_ANOM"] = (
-        app_train["DAYS_EMPLOYED"] == 365243
-    ).astype("int8")
-
-    app_train["DAYS_EMPLOYED"] = app_train["DAYS_EMPLOYED"].replace(365243, np.nan)
+    app_train = prepare_application_frame(app_train)
+    if app_test is not None:
+        app_test = prepare_application_frame(app_test)
 
     # ================================
     # TRAP B — PREV_APP FIX
@@ -346,26 +478,31 @@ if __name__ == "__main__":
         "SK_ID_CURR dtype enforcement failed"
 
     # ================================
-    # STAGE 3 — SORT + SPLIT
+    # STAGE 3 — SPLIT
     # ================================
-    app_sorted = proxy_recency_sort(app_train)
-
-    train, val_model, val_policy, test = ordered_split_60_10_10_20(app_sorted)
+    (train, val_model, val_policy, test), split_metadata = build_application_splits(
+        app_train,
+        split_mode=SPLIT_MODE,
+        random_state=SPLIT_RANDOM_STATE,
+    )
 
     # ================================
     # TRAP C — INCOME CAP
     # ================================
     income_cap = train["AMT_INCOME_TOTAL"].quantile(0.99)
 
-    for partition in [train, val_model, val_policy, test]:
-        partition["AMT_INCOME_TOTAL_CAPPED"] = partition["AMT_INCOME_TOTAL"].clip(
-            upper=income_cap
-        )
+    train = apply_income_cap(train, income_cap)
+    val_model = apply_income_cap(val_model, income_cap)
+    val_policy = apply_income_cap(val_policy, income_cap)
+    test = apply_income_cap(test, income_cap)
 
     # ================================
     # ADVERSARIAL DATASET
     # ================================
-    adv_train_df, adv_val_df = build_adversarial_dataset(app_train, app_test)
+    adv_train_df = None
+    adv_val_df = None
+    if app_test is not None:
+        adv_train_df, adv_val_df = build_adversarial_dataset(app_train, app_test)
 
     # ================================
     # PRINT SHAPES
@@ -376,15 +513,22 @@ if __name__ == "__main__":
     print(f"{filenames[3]}: {inst.shape[0]} rows, {inst.shape[1]} cols")
     print(f"{filenames[4]}: {pos_cash.shape[0]} rows, {pos_cash.shape[1]} cols")
     print(f"{filenames[5]}: {cc.shape[0]} rows, {cc.shape[1]} cols")
-    print(f"{filenames[6]}: {app_test.shape[0]} rows, {app_test.shape[1]} cols")
+    if app_test is not None:
+        print(f"{filenames[6]}: {app_test.shape[0]} rows, {app_test.shape[1]} cols")
+    print(f"split_mode: {split_metadata['split_mode']}")
+    print(f"split_random_state: {split_metadata['random_state']}")
 
     print("\nSplit Sizes:")
     print(f"train:      {len(train)} rows")
     print(f"val_model:  {len(val_model)} rows")
     print(f"val_policy: {len(val_policy)} rows")
     print(f"test:       {len(test)} rows")
-    print(f"adv_train:  {len(adv_train_df)} rows")
-    print(f"adv_val:    {len(adv_val_df)} rows")
+    if adv_train_df is not None and adv_val_df is not None:
+        print(f"adv_train:  {len(adv_train_df)} rows")
+        print(f"adv_val:    {len(adv_val_df)} rows")
+    else:
+        print("adv_train:  skipped")
+        print("adv_val:    skipped")
 
     # ================================
     # VALIDATION CHECKS (STAGE 3)
@@ -394,15 +538,13 @@ if __name__ == "__main__":
     ratio = len(train) / len(app_train)
     assert 0.599 <= ratio <= 0.601
 
-    assert train.index[0] == 0
-
     for df in [train, val_model, val_policy, test]:
         assert "AMT_INCOME_TOTAL_CAPPED" in df.columns
 
-    assert adv_train_df["ADV_LABEL"].nunique() == 2
-
-    val_dist = adv_val_df["ADV_LABEL"].value_counts(normalize=True)
-    assert abs(val_dist[0] - 0.5) < 0.05
+    if adv_train_df is not None and adv_val_df is not None:
+        assert adv_train_df["ADV_LABEL"].nunique() == 2
+        val_dist = adv_val_df["ADV_LABEL"].value_counts(normalize=True)
+        assert abs(val_dist[0] - 0.5) < 0.05
     
     # ================================
     # STAGE 4 — DIRECTORY SETUP
@@ -433,13 +575,14 @@ if __name__ == "__main__":
     serialize_dataframe(test, DATA_PROCESSED_DIR + "test.pkl")
 
     adv_path = DATA_PROCESSED_DIR + "app_test_adv.pkl"
-    with open(adv_path, "wb") as f:
-        pickle.dump(
-            {"adv_train": adv_train_df, "adv_val": adv_val_df},
-            f,
-            protocol=4
-        )
-    print(f"Saved {adv_path}")
+    if adv_train_df is not None and adv_val_df is not None:
+        with open(adv_path, "wb") as f:
+            pickle.dump(
+                {"adv_train": adv_train_df, "adv_val": adv_val_df},
+                f,
+                protocol=4
+            )
+        print(f"Saved {adv_path}")
 
     # ================================
     # SAVE INCOME CAP
@@ -456,6 +599,8 @@ if __name__ == "__main__":
         adv_train_df,
         adv_val_df,
         float(income_cap),
+        split_metadata["split_mode"],
+        split_metadata["random_state"],
     )
     processed_manifest_path = os.path.join(
         DATA_PROCESSED_DIR,
@@ -483,11 +628,12 @@ if __name__ == "__main__":
     verify_dataframe(DATA_PROCESSED_DIR + "val_policy.pkl", val_policy)
     verify_dataframe(DATA_PROCESSED_DIR + "test.pkl", test)
 
-    with open(adv_path, "rb") as f:
-        adv_loaded = pickle.load(f)
+    if adv_train_df is not None and adv_val_df is not None:
+        with open(adv_path, "rb") as f:
+            adv_loaded = pickle.load(f)
 
-    assert isinstance(adv_loaded, dict)
-    assert set(adv_loaded.keys()) == {"adv_train", "adv_val"}
+        assert isinstance(adv_loaded, dict)
+        assert set(adv_loaded.keys()) == {"adv_train", "adv_val"}
 
     loaded_income_cap = joblib.load(DATA_PROCESSED_DIR + "income_cap.joblib")
     assert isinstance(loaded_income_cap, float)
@@ -655,6 +801,8 @@ if __name__ == "__main__":
     
     report = {
         "dataset": "application_train",
+        "split_mode": split_metadata["split_mode"],
+        "random_state": split_metadata["random_state"],
         "total_rows": int(len(app_train)),
         "total_cols": int(len(app_train.columns)),
         "target_default_rate": float(train["TARGET"].mean().round(4)),
@@ -680,7 +828,7 @@ if __name__ == "__main__":
         }
     }
 
-    with open("data/data_quality_report.json", "w") as f:
+    with open(DATA_QUALITY_REPORT_PATH, "w") as f:
         json.dump(report, f, indent=2)
 
-    print("data_quality_report.json saved")
+    print(f"{DATA_QUALITY_REPORT_PATH} saved")

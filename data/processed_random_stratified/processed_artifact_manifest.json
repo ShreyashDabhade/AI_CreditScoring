@@ -1,0 +1,80 @@
+{
+  "adversarial_summary": {
+    "adv_train_rows": 0,
+    "adv_val_rows": 0,
+    "diagnostic_only": false,
+    "enabled": false,
+    "git_commit": "e45b2b63df821d972c064c04d4467426e60a8a63",
+    "income_cap_used": 472500.0,
+    "notes": [
+      "application_test.csv is reserved for final inference in random_stratified competition mode."
+    ],
+    "schema_hash": null
+  },
+  "application_train_cleaned_rows": 307511,
+  "duplicate_summary": {
+    "cross_split_duplicate_sk_id_curr": 0,
+    "test_duplicate_sk_id_curr": 0,
+    "train_duplicate_sk_id_curr": 0,
+    "val_model_duplicate_sk_id_curr": 0,
+    "val_policy_duplicate_sk_id_curr": 0
+  },
+  "git_commit": "e45b2b63df821d972c064c04d4467426e60a8a63",
+  "income_cap": 472500.0,
+  "manifest_version": 2,
+  "processed_manifest_fingerprint": "3b3b40eedd248b63c99172a79cde7eeb24e8672426b958c42d047a18f32bbf66",
+  "random_state": 42,
+  "split_fingerprints": {
+    "test": "b207ed4c62a1cc448607c83b01ea829594a741a6dd010b363d6d5dc692cef780",
+    "train": "3d124d02a7dd1b2652126fc4dd79e3c1eb2674322410771b2996d029014687fc",
+    "val_model": "673ddb51b9c541e266cbf685e9317439a5e481189b5613ab5d6d502858b12648",
+    "val_policy": "e453d6a564d1b5b1943fbd008a7bdb4b118e27c36039e98e671887177a53c155"
+  },
+  "split_fractions": {
+    "test": 0.2,
+    "train": 0.6,
+    "val_model": 0.1,
+    "val_policy": 0.1
+  },
+  "split_mode": "random_stratified",
+  "split_schema_hashes": {
+    "test": "23f5232ffb36f9f533ca70bd6e8abbdc0516750f36dcdb0f7e1995538b72206d",
+    "train": "23f5232ffb36f9f533ca70bd6e8abbdc0516750f36dcdb0f7e1995538b72206d",
+    "val_model": "23f5232ffb36f9f533ca70bd6e8abbdc0516750f36dcdb0f7e1995538b72206d",
+    "val_policy": "23f5232ffb36f9f533ca70bd6e8abbdc0516750f36dcdb0f7e1995538b72206d"
+  },
+  "split_summary": {
+    "test": {
+      "days_employed_anom_rate": 0.1800562574183373,
+      "mean_abs_days_id_publish": 2991.474155732241,
+      "mean_abs_days_registration": 4976.229778086707,
+      "positive_count": 4965,
+      "rows": 61503,
+      "target_rate": 0.08072776937710356
+    },
+    "train": {
+      "days_employed_anom_rate": 0.18007544470098533,
+      "mean_abs_days_id_publish": 2997.172845327523,
+      "mean_abs_days_registration": 4995.403786326732,
+      "positive_count": 14895,
+      "rows": 184506,
+      "target_rate": 0.08072908198107379
+    },
+    "val_model": {
+      "days_employed_anom_rate": 0.1787909336281747,
+      "mean_abs_days_id_publish": 2993.515462911775,
+      "mean_abs_days_registration": 4981.190953139735,
+      "positive_count": 2482,
+      "rows": 30751,
+      "target_rate": 0.08071282234724074
+    },
+    "val_policy": {
+      "days_employed_anom_rate": 0.18135995577379596,
+      "mean_abs_days_id_publish": 2982.522974862606,
+      "mean_abs_days_registration": 4955.1303697440735,
+      "positive_count": 2483,
+      "rows": 30751,
+      "target_rate": 0.08074534161490683
+    }
+  }
+}

@@ -1,7 +1,12 @@
 import pandas as pd
+import pandas as pd
 import pytest
 
-from src.data_pipeline import ordered_split_60_10_10_20, proxy_recency_sort
+from src.data_pipeline import (
+    ordered_split_60_10_10_20,
+    proxy_recency_sort,
+    random_stratified_split_60_10_10_20,
+)
 from src.runtime_verification import validate_processed_splits
 
 
@@ -70,3 +75,36 @@ def test_ordered_split_and_verifier_enforce_oldest_to_newest_regime():
     }
     with pytest.raises(ValueError, match="Proxy-time split ordering violated"):
         validate_processed_splits(wrong_order)
+
+
+def test_random_stratified_split_preserves_partition_sizes_and_target_mix():
+    df = pd.DataFrame(
+        {
+            "SK_ID_CURR": list(range(100001, 100041)),
+            "TARGET": [0, 1] * 20,
+            "DAYS_ID_PUBLISH": ([-100.0, -5000.0, -200.0, -4900.0] * 10),
+            "DAYS_REGISTRATION": ([-800.0, -6000.0, -700.0, -5900.0] * 10),
+            "DAYS_EMPLOYED_ANOM": [0] * 40,
+        }
+    )
+
+    train, val_model, val_policy, test = random_stratified_split_60_10_10_20(df, random_state=42)
+
+    assert len(train) == 24
+    assert len(val_model) == 4
+    assert len(val_policy) == 4
+    assert len(test) == 8
+
+    for split_df in (train, val_model, val_policy, test):
+        assert split_df["TARGET"].mean() == 0.5
+
+    verification = validate_processed_splits(
+        {
+            "train": train,
+            "val_model": val_model,
+            "val_policy": val_policy,
+            "test": test,
+        },
+        split_mode="random_stratified",
+    )
+    assert verification["split_mode"] == "random_stratified"

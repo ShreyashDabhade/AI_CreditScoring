@@ -8,6 +8,10 @@ import os
 # â”€â”€â”€ Reproducibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 RANDOM_STATE: int = 42
 
+# Split regime
+DEFAULT_SPLIT_MODE: str = "proxy_time"
+SUPPORTED_SPLIT_MODES: tuple[str, ...] = ("proxy_time", "random_stratified")
+
 # â”€â”€â”€ Data Split Fractions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 TRAIN_FRAC: float = 0.60
 VAL_MODEL_FRAC: float = 0.10

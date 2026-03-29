@@ -135,7 +135,11 @@ def load_json_object(path: str, label: str) -> dict[str, Any]:
     return payload
 
 
-def validate_processed_splits(splits: Mapping[str, pd.DataFrame]) -> dict[str, Any]:
+def validate_processed_splits(
+    splits: Mapping[str, pd.DataFrame],
+    *,
+    split_mode: str = "proxy_time",
+) -> dict[str, Any]:
     missing = [name for name in EXPECTED_PROCESSED_SPLITS if name not in splits]
     if missing:
         raise ValueError(f"Missing processed splits for verification: {missing}")
@@ -177,26 +181,28 @@ def validate_processed_splits(splits: Mapping[str, pd.DataFrame]) -> dict[str, A
     if len(unique_schema_hashes) != 1:
         raise ValueError("Processed splits do not share an identical schema")
 
-    for left, right in zip(EXPECTED_PROCESSED_SPLITS, EXPECTED_PROCESSED_SPLITS[1:]):
-        left_publish = pd.to_numeric(splits[left]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
-        right_publish = pd.to_numeric(splits[right]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
-        if not left_publish.empty and not right_publish.empty:
-            if float(left_publish.min()) < float(right_publish.max()):
-                raise ValueError(
-                    "Proxy-time split ordering violated between "
-                    f"{left} and {right} on DAYS_ID_PUBLISH"
-                )
+    if split_mode == "proxy_time":
+        for left, right in zip(EXPECTED_PROCESSED_SPLITS, EXPECTED_PROCESSED_SPLITS[1:]):
+            left_publish = pd.to_numeric(splits[left]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
+            right_publish = pd.to_numeric(splits[right]["DAYS_ID_PUBLISH"], errors="coerce").abs().dropna()
+            if not left_publish.empty and not right_publish.empty:
+                if float(left_publish.min()) < float(right_publish.max()):
+                    raise ValueError(
+                        "Proxy-time split ordering violated between "
+                        f"{left} and {right} on DAYS_ID_PUBLISH"
+                    )
 
-        left_registration = pd.to_numeric(splits[left]["DAYS_REGISTRATION"], errors="coerce").abs().dropna()
-        right_registration = pd.to_numeric(splits[right]["DAYS_REGISTRATION"], errors="coerce").abs().dropna()
-        if not left_registration.empty and not right_registration.empty:
-            if float(left_registration.mean()) < float(right_registration.mean()):
-                raise ValueError(
-                    "Proxy-time split ordering violated between "
-                    f"{left} and {right} on DAYS_REGISTRATION mean"
-                )
+            left_registration = pd.to_numeric(splits[left]["DAYS_REGISTRATION"], errors="coerce").abs().dropna()
+            right_registration = pd.to_numeric(splits[right]["DAYS_REGISTRATION"], errors="coerce").abs().dropna()
+            if not left_registration.empty and not right_registration.empty:
+                if float(left_registration.mean()) < float(right_registration.mean()):
+                    raise ValueError(
+                        "Proxy-time split ordering violated between "
+                        f"{left} and {right} on DAYS_REGISTRATION mean"
+                    )
 
     return {
+        "split_mode": split_mode,
         "duplicate_summary": duplicate_summary,
         "split_schema_hashes": split_schema_hashes,
         "split_fingerprints": split_fingerprints,
