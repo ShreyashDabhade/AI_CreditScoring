@@ -490,6 +490,10 @@ pre {
     align-items: center;
 }
 
+.hero-grid-single {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 .hero-copy p:not(.eyebrow) {
     max-width: 560px;
     margin-top: 24px;
@@ -661,6 +665,28 @@ pre {
 .tier-description {
     margin-top: 16px;
     color: var(--text-muted);
+}
+
+.portal-section-card .tier-toggle {
+    border-color: var(--line-panel);
+    background: #ffffff;
+    color: var(--text-dark);
+}
+
+.portal-section-card .tier-toggle:hover,
+.portal-section-card .tier-toggle:focus-visible {
+    border-color: rgba(0, 174, 239, 0.42);
+    background: #f3faff;
+}
+
+.portal-section-card .tier-toggle.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #ffffff;
+}
+
+.portal-section-card .tier-description {
+    color: var(--text-soft-dark);
 }
 
 .analysis-workspace-section {
@@ -1416,14 +1442,37 @@ pre {
 
 .analyst-panel-header h2 {
     font-size: 28px;
-    color: var(--text-dark);
+    color: var(--text-primary);
 }
 
-.analyst-master-panel .button-ghost,
-.analyst-detail-panel .button-ghost,
+.analyst-panel-header .button-ghost {
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.32);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.analyst-panel-header .button-ghost:hover,
+.analyst-panel-header .button-ghost:focus-visible {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.44);
+}
+
+.analyst-detail-actions .button-ghost,
+.analyst-action-stack .button-ghost,
 .analyst-mini-action.button-ghost {
     color: var(--text-dark);
     border-color: var(--line-panel);
+    background: #ffffff;
+}
+
+.analyst-detail-actions .button-ghost:hover,
+.analyst-detail-actions .button-ghost:focus-visible,
+.analyst-action-stack .button-ghost:hover,
+.analyst-action-stack .button-ghost:focus-visible,
+.analyst-mini-action.button-ghost:hover,
+.analyst-mini-action.button-ghost:focus-visible {
+    background: #f3f9fd;
+    border-color: rgba(0, 174, 239, 0.32);
 }
 
 .analyst-toolbar {
@@ -1431,6 +1480,10 @@ pre {
     grid-template-columns: minmax(0, 1fr) 220px;
     gap: 14px;
     margin-bottom: 18px;
+}
+
+.analyst-toolbar .input-field label {
+    color: var(--text-muted);
 }
 
 .analyst-filter-row {
@@ -2643,6 +2696,19 @@ pre {
     background: rgba(0, 174, 239, 0.12);
     transform: translateY(-1px);
     outline: none;
+}
+
+.report-copilot-prompt-primary {
+    border-color: rgba(0, 174, 239, 0.44);
+    background: linear-gradient(135deg, rgba(0, 174, 239, 0.24), rgba(0, 174, 239, 0.1));
+    box-shadow: 0 10px 24px rgba(0, 174, 239, 0.12);
+}
+
+.report-copilot-prompt-primary:hover:not(:disabled),
+.report-copilot-prompt-primary:focus-visible {
+    border-color: rgba(0, 174, 239, 0.62);
+    background: linear-gradient(135deg, rgba(0, 174, 239, 0.34), rgba(0, 174, 239, 0.14));
+    box-shadow: 0 12px 28px rgba(0, 174, 239, 0.16);
 }
 
 .report-copilot-prompt:disabled {

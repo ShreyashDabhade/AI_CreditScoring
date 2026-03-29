@@ -2,20 +2,19 @@
 
 {% block content %}
 <section class="section hero-section">
-    <div class="section-shell hero-grid">
+    <div class="section-shell hero-grid hero-grid-single">
         <div class="hero-copy">
             <p class="eyebrow">Credit Risk Intelligence</p>
             <h1>Intelligent Credit Decisions</h1>
             <p>
-                MasterMind AI combines explainability, fairness auditing,
-                and calibrated probability into a single scoring system.
+                MasterMind AI combines explainability and calibrated probability
+                into a single scoring system.
             </p>
             <div class="button-row">
                 <a class="button button-primary" href="{{ url_for('analyze') }}">Analyse an Application</a>
                 <a class="button button-ghost" href="{{ url_for('status_page') }}">View System Status</a>
             </div>
         </div>
-        <div class="hero-void" aria-hidden="true"></div>
     </div>
 </section>
 
@@ -52,16 +51,6 @@
                 </p>
             </article>
 
-            <article class="feature-block">
-                <svg viewBox="0 0 48 48" aria-hidden="true">
-                    <path d="m24 7 14 6v9c0 8.6-5.8 16.3-14 18.5C15.8 38.3 10 30.6 10 22v-9zm-3.1 20.4 11.8-11.8-2.8-2.8-9 9-4.7-4.7-2.8 2.8z"></path>
-                </svg>
-                <h3>Fairness Audited</h3>
-                <p>
-                    A proxy fairness audit runs offline before deployment.
-                    The result is reflected on every scored response.
-                </p>
-            </article>
         </div>
     </div>
 </section>
@@ -107,7 +96,7 @@
     <div class="section-shell about-block">
         <h2>About MasterMind AI</h2>
         <p>MasterMind AI is an explainable credit scoring system built on the Home Credit Default Risk dataset.</p>
-        <p>The pipeline runs through five modules: data preparation, feature engineering, model training and calibration, fairness auditing, and a live Flask API.</p>
+        <p>The pipeline runs through five modules: data preparation, feature engineering, model training, calibration, and a live Flask API.</p>
         <p>Every decision from the API includes a calibrated probability of default, a policy outcome - APPROVE, REVIEW, or DECLINE - and the top five SHAP feature drivers.</p>
     </div>
 </section>

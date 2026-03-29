@@ -25,6 +25,14 @@
     const conversationHistory = [];
     let isSending = false;
 
+    function getApplicantId() {
+        const summary = reportContext.applicant_summary || {};
+        return summary.sk_id_curr
+            || reportContext.application_id
+            || reportContext.sk_id_curr
+            || null;
+    }
+
     function setHidden(element, hidden) {
         if (!element) {
             return;
@@ -190,6 +198,20 @@
         });
     }
 
+    function resolvePrompt(button) {
+        const template = button.getAttribute("data-copilot-prompt-template");
+        if (!template) {
+            return button.textContent || "";
+        }
+
+        const applicantId = getApplicantId();
+        if (!applicantId) {
+            return button.textContent || "";
+        }
+
+        return template.replaceAll("{applicant_id}", String(applicantId));
+    }
+
     form.addEventListener("submit", (event) => {
         event.preventDefault();
         sendMessage(input.value);
@@ -197,7 +219,7 @@
 
     promptButtons.forEach((button) => {
         button.addEventListener("click", () => {
-            sendMessage(button.textContent || "");
+            sendMessage(resolvePrompt(button));
         });
     });
 

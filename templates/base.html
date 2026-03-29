@@ -69,14 +69,6 @@
                         <span class="utility-value monospace">{{ health_snapshot.model_version }}</span>
                     </div>
                     <div class="utility-card">
-                        <span class="utility-label">Fairness Audit</span>
-                        <span class="utility-value">
-                            <span class="decision-badge {% if health_snapshot.fairness_audit_passed %}approve{% else %}decline{% endif %}">
-                                {{ "Passed" if health_snapshot.fairness_audit_passed else "Not passed" }}
-                            </span>
-                        </span>
-                    </div>
-                    <div class="utility-card">
                         <span class="utility-label">Coverage Tiers</span>
                         <span class="utility-value">{{ health_snapshot.coverage_tiers_available | join(", ") }}</span>
                     </div>
@@ -110,7 +102,6 @@
                 </div>
                 <div class="section-shell footer-bottom">
                     <p>MasterMind AI analyst shell for explainable credit decisions.</p>
-                    <p>fairness_v2026Q1</p>
                 </div>
             </footer>
         </div>
