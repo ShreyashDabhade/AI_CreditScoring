@@ -1,4 +1,5 @@
 (function () {
+    const BASE_URL = window.__API_BASE_URL__ || window.location.origin || "";
     const config = window.__MASTERMIND_UI__;
     if (!config) {
         return;
@@ -89,6 +90,16 @@
 
     function cloneValue(value) {
         return JSON.parse(JSON.stringify(value || {}));
+    }
+
+    function resolveApiUrl(path) {
+        if (!path) {
+            return BASE_URL;
+        }
+        if (/^https?:\/\//i.test(path)) {
+            return path;
+        }
+        return `${BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
     }
 
     function navScrollState() {
@@ -187,6 +198,7 @@
 
     function buildPayload(form) {
         const payload = cloneValue((config.samplePayloads || {})[state.tier] || {});
+        payload.tier = state.tier;
         const sections = state.tier === "FULL"
             ? ["application", "bureau_agg", "previous_agg", "installments_agg", "pos_cash_agg", "credit_card_agg"]
             : ["application"];
@@ -305,7 +317,7 @@
         elements.resultSection.classList.add("is-hidden");
 
         try {
-            const response = await fetch(config.routes.score, {
+            const response = await fetch(resolveApiUrl(config.routes.score), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -419,7 +431,7 @@
     async function initStatusPage() {
         applyStatusHealth(initialHealth);
         try {
-            const response = await fetch(config.routes.health, {
+            const response = await fetch(resolveApiUrl(config.routes.health), {
                 headers: {
                     Accept: "application/json",
                 },

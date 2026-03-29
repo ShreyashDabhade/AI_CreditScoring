@@ -2,10 +2,10 @@
   "dataset": "application_train",
   "total_rows": 307511,
   "total_cols": 123,
-  "target_default_rate": 0.0907,
+  "target_default_rate": 0.0708,
   "class_counts": {
-    "0": 167774,
-    "1": 16732
+    "0": 171448,
+    "1": 13058
   },
   "sentinel_counts": {
     "DAYS_EMPLOYED_365243": 55374
@@ -80,7 +80,7 @@
     "AMT_REQ_CREDIT_BUREAU_QRT": 0.135,
     "AMT_REQ_CREDIT_BUREAU_YEAR": 0.135
   },
-  "income_cap_p99": 495000.0,
+  "income_cap_p99": 450000.0,
   "split_sizes": {
     "train": 184506,
     "val_model": 30751,

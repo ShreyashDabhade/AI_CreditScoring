@@ -1,4 +1,5 @@
 (function () {
+    const BASE_URL = window.__API_BASE_URL__ || window.location.origin || "";
     const config = window.__REPORT_COPILOT__;
     const reportContext = window.__REPORT_CHAT_CONTEXT__;
     const root = document.getElementById("report-copilot-root");
@@ -24,6 +25,16 @@
 
     const conversationHistory = [];
     let isSending = false;
+
+    function resolveApiUrl(path) {
+        if (!path) {
+            return BASE_URL;
+        }
+        if (/^https?:\/\//i.test(path)) {
+            return path;
+        }
+        return `${BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+    }
 
     function setHidden(element, hidden) {
         if (!element) {
@@ -112,7 +123,7 @@
 
     async function refreshAvailability() {
         try {
-            const response = await fetch(config.healthEndpoint, {
+            const response = await fetch(resolveApiUrl(config.healthEndpoint), {
                 headers: { Accept: "application/json" },
             });
             const payload = await response.json();
@@ -144,7 +155,7 @@
         setBusy(true);
 
         try {
-            const response = await fetch(config.endpoint, {
+            const response = await fetch(resolveApiUrl(config.endpoint), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

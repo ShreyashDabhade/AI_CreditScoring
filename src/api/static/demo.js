@@ -1,4 +1,5 @@
 (function () {
+    const BASE_URL = window.__API_BASE_URL__ || window.location.origin || "";
     const config = window.__MASTERMIND_DEMO__;
     if (!config) {
         return;
@@ -26,6 +27,16 @@
 
     function structuredCloneSafe(value) {
         return JSON.parse(JSON.stringify(value || {}));
+    }
+
+    function resolveApiUrl(path) {
+        if (!path) {
+            return BASE_URL;
+        }
+        if (/^https?:\/\//i.test(path)) {
+            return path;
+        }
+        return `${BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
     }
 
     function getVisibleSections() {
@@ -196,7 +207,7 @@
     async function refreshHealth() {
         setStatus("Checking backend health...", null);
         try {
-            const response = await fetch(config.routes.health, {
+            const response = await fetch(resolveApiUrl(config.routes.health), {
                 method: "GET",
                 headers: { Accept: "application/json" },
             });
@@ -218,10 +229,11 @@
 
     async function submitScore() {
         const payload = getCurrentPayload();
+        payload.tier = state.tier;
         setStatus(`Submitting ${state.tier} payload through validate -> transform -> score -> calibrate -> explain.`, null);
         elements.resultJson.textContent = "";
         try {
-            const response = await fetch(config.routes.score, {
+            const response = await fetch(resolveApiUrl(config.routes.score), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

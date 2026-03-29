@@ -1,0 +1,25 @@
+application_train.csv: 307511 rows, 123 cols
+bureau.csv: 1716428 rows, 17 cols
+previous_application.csv: 1670214 rows, 42 cols
+installments_payments.csv: 13605401 rows, 8 cols
+POS_CASH_balance.csv: 10001358 rows, 8 cols
+credit_card_balance.csv: 3840312 rows, 23 cols
+application_test.csv: 48744 rows, 121 cols
+
+Split Sizes:
+train:      184506 rows
+val_model:  30751 rows
+val_policy: 30751 rows
+test:       61503 rows
+adv_train:  77990 rows
+adv_val:    19498 rows
+Saved data/processed/train.pkl: 184506 rows, 124 cols
+Saved data/processed/val_model.pkl: 30751 rows, 124 cols
+Saved data/processed/val_policy.pkl: 30751 rows, 124 cols
+Saved data/processed/test.pkl: 61503 rows, 124 cols
+Saved data/processed/app_test_adv.pkl
+income_cap = 450000.00 saved
+Saved data/processed/processed_artifact_manifest.json
+
+All serialization checks passed.
+data_quality_report.json saved

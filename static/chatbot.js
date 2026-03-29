@@ -9,6 +9,8 @@
 (function () {
     'use strict';
 
+    var BASE_URL = window.__API_BASE_URL__ || window.location.origin || '';
+
     var widget   = document.getElementById('chat-widget');
     var toggle   = document.getElementById('chat-toggle');
     var closeBtn = document.getElementById('chat-close');
@@ -23,6 +25,12 @@
     var conversationHistory = [];
     var isOpen = false;
     var isSending = false;
+
+    function _resolveApiUrl(path) {
+        if (!path) return BASE_URL;
+        if (/^https?:\/\//i.test(path)) return path;
+        return BASE_URL + (path.charAt(0) === '/' ? path : '/' + path);
+    }
 
     function _getReportContext() {
         if (window.__REPORT_CHAT_CONTEXT__ && typeof window.__REPORT_CHAT_CONTEXT__ === 'object') {
@@ -205,7 +213,7 @@
         _showTyping();
 
         try {
-            var response = await fetch('/api/chat', {
+            var response = await fetch(_resolveApiUrl('/api/chat'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

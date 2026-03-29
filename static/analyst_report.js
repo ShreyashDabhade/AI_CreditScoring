@@ -1,4 +1,5 @@
 (function () {
+    const BASE_URL = window.__API_BASE_URL__ || window.location.origin || "";
     const simulatorConfig = window.__REPORT_SIMULATOR__;
     const root = document.getElementById("what-if-simulator-root");
     if (!simulatorConfig || !root) {
@@ -17,6 +18,16 @@
     const reportChatContext = window.__REPORT_CHAT_CONTEXT__ && typeof window.__REPORT_CHAT_CONTEXT__ === "object"
         ? window.__REPORT_CHAT_CONTEXT__
         : null;
+
+    function resolveApiUrl(path) {
+        if (!path) {
+            return BASE_URL;
+        }
+        if (/^https?:\/\//i.test(path)) {
+            return path;
+        }
+        return `${BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+    }
 
     function setHidden(element, hidden) {
         if (!element) {
@@ -211,7 +222,7 @@
 
         setBusy(true);
         try {
-            const response = await fetch(simulatorConfig.endpoint, {
+            const response = await fetch(resolveApiUrl(simulatorConfig.endpoint), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
