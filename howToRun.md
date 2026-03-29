@@ -1,14 +1,15 @@
-**Real Pipeline Runbook**
+**Backend Freeze Runbook**
 
 Run commands from the repo root.
 
-**Final Branch Truth**
+**Frozen Defaults**
 
-- REDUCED runtime baseline remains XGBoost.
-- REDUCED LightGBM and REDUCED weighted blend remain offline-only candidates.
-- The offline REDUCED experiments are preserved for inspection, not deployment.
+- Runtime processed path: `data/processed/`
+- Runtime artifact path: `artifacts/`
+- Supported split modes: `proxy_time`, `random_stratified`
+- Default split mode: `proxy_time`
 
-**1. Setup**
+**1. Install**
 
 ```bash
 python -m venv .venv
@@ -16,48 +17,25 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-Set runtime paths for the shell session:
-
-```bash
-export DATA_PROCESSED_DIR=data/processed/
-export ARTIFACT_DIR=artifacts/
-```
-
 **2. Rebuild The Canonical Runtime Stack**
-
-Module 1:
 
 ```bash
 python -m src.data_pipeline
-```
-
-Module 2:
-
-```bash
 python -m src.feature_engineering
-```
-
-Module 3:
-
-```bash
 python -m src.models.train
-```
-
-Module 4:
-
-```bash
 python -m src.fairness_audit
 ```
 
-Important:
+Notes:
 
-- Do not replace `artifacts/reduced_model.joblib` or `artifacts/reduced_calibrator.joblib` with offline experiment artifacts.
-- Module 5 should continue to read only the canonical runtime artifact names.
+- Module 5 must continue to read only the canonical runtime names under `artifacts/`.
+- Do not swap in files from offline experiment folders.
+- Offline experiment folders are preserved for analysis, not deployment.
 
 **3. Start The Real API**
 
 ```bash
-python -c "from src.api.app import create_app; app = create_app(artifact_dir='artifacts', processed_dir='data/processed', mock_mode=False, strict_artifacts=True); app.run(host='127.0.0.1', port=5000)"
+python -c "from src.api.app import create_app; app = create_app(mock_mode=False, strict_artifacts=True); app.run(host='127.0.0.1', port=5000)"
 ```
 
 Useful checks:
@@ -70,67 +48,31 @@ Open the demo at:
 
 - `http://127.0.0.1:5000/demo`
 
-**4. Reproduce The Offline REDUCED Diagnostics**
-
-REDUCED blend experiment:
-
-```bash
-python -c "from src.models.reduced_blend import run_reduced_blend_experiment; run_reduced_blend_experiment()"
-```
-
-REDUCED calibrated comparison:
-
-```bash
-python -c "from src.models.reduced_blend_calibrated_compare import run_reduced_blend_calibrated_compare; run_reduced_blend_calibrated_compare()"
-```
-
-REDUCED policy-threshold diagnostic:
-
-```bash
-python -c "from src.models.reduced_policy_threshold_diag import run_reduced_policy_threshold_diag; run_reduced_policy_threshold_diag()"
-```
-
-REDUCED previous-vs-merged retraining comparison:
-
-```bash
-python -c "from src.models.reduced_training_regime_compare import run_reduced_training_regime_comparison; run_reduced_training_regime_comparison()"
-```
-
-FULL subgroup calibration experiment:
-
-```bash
-python -c "from src.models.subgroup_calibration import run_subgroup_calibration_experiments; run_subgroup_calibration_experiments()"
-```
-
-FULL fairness-aware retraining experiment:
-
-```bash
-python -c "from src.models.fairness_aware_training import run_fairness_aware_modeling_experiments; run_fairness_aware_modeling_experiments()"
-```
-
-Those reports write only to:
-
-- `artifacts/reduced_blend/`
-- `artifacts/reduced_blend_calibrated_compare/`
-- `artifacts/reduced_policy_threshold_diag/`
-- `artifacts/reduced_training_regime_comparison_report.json`
-- `artifacts/subgroup_calibration_experiment_report.json`
-- `artifacts/fairness_aware_modeling_experiment_report.json`
-
-They are preserved as offline evidence only.
-
-**5. Focused Regression Checks**
+**4. Focused Merge-Readiness Checks**
 
 ```bash
 python -m pytest tests/test_api.py
-python -m pytest tests/test_m3_blending.py
-python -m pytest tests/test_reduced_blend_calibrated_compare.py
-python -m pytest tests/test_reduced_policy_threshold_diag.py
+python -m pytest tests/test_backend_freeze_contract.py
+python -m pytest tests/test_module1_split_regime.py
 ```
 
-**6. Where To Read The Final Story**
+**5. Offline-Only Evidence**
 
-- `README.md`
-- `Documentation/final_branch_summary.md`
-- `Documentation/offline_experiment_index.md`
+Preserved offline paths include:
+
+- `artifacts/reduced_thin_blend/`
+- `artifacts/reduced_thin_lgbm/`
+- `artifacts/reduced_thin_diag/`
+- `artifacts/reduced_thin_opt/`
+- `artifacts/alt_stacked_reduced/`
+- `artifacts/random_stratified_reduced/`
+- `artifacts/random_stratified_full_and_reduced/`
+
+Those paths are not runtime API inputs.
+
+**6. Docs To Hand To Frontend**
+
+- `Documentation/backend_api_contract.md`
+- `Documentation/backend_freeze_summary.md`
 - `Documentation/artifact_contract.md`
+- `Documentation/offline_experiment_index.md`

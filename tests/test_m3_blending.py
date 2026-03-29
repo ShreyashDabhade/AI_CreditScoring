@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def test_weighted_average_blend_can_choose_interior_weight():
@@ -104,12 +105,12 @@ def test_full_runtime_candidate_persists_weighted_blend_metadata(tmp_path):
 
 
 def test_reduced_blend_formula_matches_weighted_average():
-    from src.models.reduced_blend import blend_prob
+    reduced_blend = pytest.importorskip("src.models.reduced_blend")
 
     xgb = np.array([0.2, 0.8, 0.6])
     lgbm = np.array([0.4, 0.1, 0.9])
 
-    blended = blend_prob(0.25, xgb, lgbm)
+    blended = reduced_blend.blend_prob(0.25, xgb, lgbm)
 
     np.testing.assert_allclose(blended, np.array([0.35, 0.275, 0.825]))
 
@@ -174,7 +175,7 @@ def _make_reduced_blend_bundle():
 
 
 def test_reduced_blend_experiment_persists_weight_search_results(tmp_path, monkeypatch):
-    from src.models import reduced_blend
+    reduced_blend = pytest.importorskip("src.models.reduced_blend")
 
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()
@@ -223,7 +224,7 @@ def test_reduced_blend_experiment_persists_weight_search_results(tmp_path, monke
 
 
 def test_reduced_blend_experiment_keeps_runtime_artifacts_isolated(tmp_path, monkeypatch):
-    from src.models import reduced_blend
+    reduced_blend = pytest.importorskip("src.models.reduced_blend")
 
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()

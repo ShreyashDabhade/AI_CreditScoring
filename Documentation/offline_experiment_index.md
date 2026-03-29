@@ -1,45 +1,48 @@
 # Offline Experiment Index
 
-This branch preserves the following REDUCED offline experiment outputs as evidence only.
+These outputs are preserved for offline analysis only. They are not runtime API inputs.
 
-## REDUCED_BLEND
+## Alternate REDUCED Runtime Candidates
 
-- Report:
-  `artifacts/reduced_blend/reduced_blend_report.json`
-- Summary:
-  `artifacts/reduced_blend/reduced_blend_summary.md`
+- `artifacts/reduced_thin_blend/`
+  contains `reduced_thin_blend_report.json`, `reduced_thin_blend_summary.md`, and selected blend sidecar artifacts
+- `artifacts/reduced_thin_lgbm/`
+  contains REDUCED LightGBM candidate runs and summaries
+- `artifacts/reduced_thin_diag/`
+  contains threshold and policy diagnostic summaries
+- `artifacts/reduced_thin_opt/`
+  contains alternative REDUCED thin-feature optimization artifacts
 
-## REDUCED Calibrated Compare
+## Alternate Data Or Stacking Experiments
 
-- Report:
-  `artifacts/reduced_blend_calibrated_compare/reduced_blend_calibrated_compare_report.json`
-- Summary:
-  `artifacts/reduced_blend_calibrated_compare/reduced_blend_calibrated_compare_summary.md`
+- `artifacts/alt_stacked_reduced/`
+  contains stacked-sidecar REDUCED experiments and reports
+- `data/processed/alt_stacked_reduced/`
+  contains processed data prepared for that offline stack
+- `data/processed/thin_file_alt/`
+  contains alternative processed inputs for thin-file experiments
 
-## REDUCED Policy-Threshold Diagnostic
+## Alternate Split-Mode Outputs
 
-- Report:
-  `artifacts/reduced_policy_threshold_diag/reduced_policy_threshold_diag_report.json`
-- Summary:
-  `artifacts/reduced_policy_threshold_diag/reduced_policy_threshold_diag_summary.md`
+- `artifacts/random_stratified_reduced/`
+  competition-mode REDUCED outputs for the `random_stratified` split regime
+- `artifacts/random_stratified_full_and_reduced/`
+  alternate FULL and REDUCED artifact stack built against `random_stratified`
+- `data/processed_random_stratified/`
+  processed manifest and splits for the alternate `random_stratified` regime
 
-## REDUCED Training-Regime Comparison
+## Top-Level Offline Reports
 
-- Report:
-  `artifacts/reduced_training_regime_comparison_report.json`
+- `artifacts/meta_blend_experiment_report.json`
+- `artifacts/catboost_experiment_report.json`
+- `artifacts/cv_blend_weight_experiment_report.json`
+- `artifacts/feature_pruning_experiment_report.json`
+- `artifacts/policy_threshold_sensitivity_report.json`
+- `artifacts/regularization_experiment_report.json`
+- `artifacts/subgroup_calibration_experiment_report.json`
+- `artifacts/fairness_aware_modeling_experiment_report.json`
 
-## FULL Subgroup Calibration
+## Guardrail
 
-- Report:
-  `artifacts/subgroup_calibration_experiment_report.json`
-
-## FULL Fairness-Aware Retraining
-
-- Report:
-  `artifacts/fairness_aware_modeling_experiment_report.json`
-
-## Interpretation Guardrail
-
-- These directories are offline-only.
-- They must not replace canonical runtime artifact names under `artifacts/`.
-- The API does not load them during strict startup.
+- Canonical runtime inputs remain only `data/processed/` plus top-level `artifacts/` runtime files.
+- Offline folders must not replace `artifacts/full_model.joblib`, `artifacts/reduced_model.joblib`, or the canonical builder/calibrator/explainer files used by the API.

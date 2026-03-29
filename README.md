@@ -1,75 +1,33 @@
 # MasterMind Credit Scoring
 
-MasterMind is a credit-scoring repo organized as a strict offline pipeline plus a Flask scoring API.
+MasterMind is a credit-scoring backend with a strict offline pipeline and a Flask scoring API.
 
-- Modules 1-4 are offline:
-  processed splits, frozen builders, trained/calibrated artifacts, and fairness/explainability outputs.
-- Module 5 is the API:
-  it eagerly validates and loads the persisted artifact stack once at startup.
+This branch is frozen for backend/frontend merge readiness. The goal is runtime stability, not further model iteration.
 
-This branch is frozen for handoff and presentation. The REDUCED modeling work has reached a truthful stopping point and no offline REDUCED candidate has been promoted into runtime defaults.
+## Frozen Runtime Defaults
 
-## Final Branch Status
+- Default processed runtime path: `data/processed/`
+- Default artifact runtime path: `artifacts/`
+- Supported split modes: `proxy_time`, `random_stratified`
+- Current default split mode: `proxy_time`
 
-- Active REDUCED runtime baseline remains XGBoost.
-- REDUCED LightGBM exists only as an offline candidate.
-- REDUCED weighted blend exists only as an offline candidate.
-- Offline REDUCED blend experiments improved held-out ranking metrics directionally.
-- Calibrated REDUCED candidates were too close to justify runtime promotion.
-- Policy-threshold diagnostics showed threshold-dependent conclusions with no robust practical winner.
-- Therefore this branch does not promote REDUCED LightGBM or REDUCED blend into live runtime paths.
+The real API loads only the canonical runtime artifact names from the default runtime paths unless `artifact_dir` or `processed_dir` is explicitly overridden.
 
-## Runtime vs Offline Paths
+## Active Runtime Artifact Stack
 
-Active runtime artifacts used by the API:
-
-- `artifacts/reduced_model.joblib`
-- `artifacts/reduced_calibrator.joblib`
-- `artifacts/reduced_shap_explainer.joblib`
-- `artifacts/full_model.joblib`
-- `artifacts/full_calibrator.joblib`
-- `artifacts/full_shap_explainer.joblib`
-- validated FULL/REDUCED builders loaded through `src/builder_artifacts.py`
-
-Offline-only REDUCED experiment directories:
-
-- `artifacts/reduced_blend/`
-- `artifacts/reduced_blend_calibrated_compare/`
-- `artifacts/reduced_policy_threshold_diag/`
-
-Those offline directories are evidence and diagnostics only. They are not API startup inputs and they do not replace runtime artifact names.
-
-## Repo Workflow
-
-The preserved workflow is:
-
-1. Module 1 writes processed splits and `data/processed/processed_artifact_manifest.json`.
-2. Module 2 fits and persists validated FULL/REDUCED frozen builders.
-3. Module 3 persists trained/calibrated runtime artifacts plus `artifacts/reproducibility_report.json`.
-4. Module 4 persists the fairness result artifact.
-5. Module 5 starts only after eager validation of the persisted stack.
-
-Real mode is strict and fail-fast by design. Missing lineage, wrong builders, or missing runtime artifacts should break startup.
-
-## Installation
-
-```bash
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`.
-
-## Real-Mode API Prerequisites
-
-Required before strict real-mode startup:
+Required processed artifact:
 
 - `data/processed/processed_artifact_manifest.json`
+
+Required builder artifacts:
+
 - `artifacts/full_feature_builder.joblib`
 - `artifacts/full_feature_builder.manifest.json`
 - `artifacts/reduced_feature_builder.joblib`
 - `artifacts/reduced_feature_builder.manifest.json`
+
+Required scoring artifacts:
+
 - `artifacts/full_model.joblib`
 - `artifacts/full_calibrator.joblib`
 - `artifacts/full_shap_explainer.joblib`
@@ -78,108 +36,89 @@ Required before strict real-mode startup:
 - `artifacts/reduced_shap_explainer.joblib`
 - `artifacts/model_fairness_audit_passed.joblib`
 
-Optional metadata:
+Optional runtime metadata:
 
 - `artifacts/reproducibility_report.json`
 
-Diagnostic-only processed artifacts such as `app_test_adv.pkl` are not live scoring inputs.
+Current deployed versions in this branch:
 
-## Run The Demo API
+- FULL runtime version: `full_weighted_blend_v2.2.0`
+- REDUCED runtime version: `reduced_v2.1.0`
 
-Strict real mode:
+Important:
+
+- FULL is already deployed in this branch through the canonical runtime files `artifacts/full_model.joblib`, `artifacts/full_calibrator.joblib`, and `artifacts/full_shap_explainer.joblib`.
+- REDUCED runtime remains the canonical single-model path under `artifacts/reduced_model.joblib`, `artifacts/reduced_calibrator.joblib`, and `artifacts/reduced_shap_explainer.joblib`.
+- REDUCED LightGBM, REDUCED blend, competition-mode artifacts, and other research outputs are offline-only and are not API inputs.
+
+## API Contract
+
+- `GET /health` returns:
+  `status`, `model_version`, `fairness_audit_passed`, `coverage_tiers_available`
+- `POST /score` accepts:
+  REDUCED payloads with only `application`
+- `POST /score` also accepts:
+  FULL payloads with `application`, `bureau_agg`, `previous_agg`, `installments_agg`, `pos_cash_agg`, and `credit_card_agg`
+
+The API is strict by design:
+
+- partial FULL payloads are rejected
+- unknown top-level sections are rejected
+- malformed JSON returns `400`
+- contract violations return `422`
+
+Exact request and response examples are documented in [Documentation/backend_api_contract.md](Documentation/backend_api_contract.md).
+
+## Runtime Vs Offline
+
+Canonical runtime inputs live only at the top level of:
+
+- `data/processed/`
+- `artifacts/`
+
+Offline-only experiment outputs preserved in this branch include:
+
+- `artifacts/reduced_thin_blend/`
+- `artifacts/reduced_thin_lgbm/`
+- `artifacts/reduced_thin_diag/`
+- `artifacts/reduced_thin_opt/`
+- `artifacts/alt_stacked_reduced/`
+- `artifacts/random_stratified_reduced/`
+- `artifacts/random_stratified_full_and_reduced/`
+- top-level offline reports such as `artifacts/meta_blend_experiment_report.json`
+
+Those paths are evidence only. They must not be treated as live runtime defaults.
+
+## Running The Real API
 
 ```bash
-export ARTIFACT_DIR=artifacts/
-export DATA_PROCESSED_DIR=data/processed/
-python -c "from src.api.app import create_app; app = create_app(); app.run(host='127.0.0.1', port=5000)"
+python -c "from src.api.app import create_app; app = create_app(mock_mode=False, strict_artifacts=True); app.run(host='127.0.0.1', port=5000)"
 ```
 
-Mock mode for local bring-up:
+Useful endpoints:
+
+- `/demo`
+- `/health`
+- `/score`
+
+Mock mode remains available for local UI bring-up:
 
 ```bash
 python -c "from src.api.app import create_app; app = create_app(mock_mode=True); app.run(host='127.0.0.1', port=5000)"
 ```
 
-Then open:
-
-- `/demo` for the interactive frontend
-- `/health` for runtime metadata
-- `/score` for strict JSON scoring
-
-## API Contract
-
-- `GET /health` returns runtime status, model version, fairness flag, and available tiers.
-- `POST /score` supports:
-  REDUCED application-only payloads
-  and FULL payloads with all required aggregate sections.
-
-The API does not load offline REDUCED experiment artifacts.
-
-## Reproduce The Key Offline REDUCED Comparisons
-
-Run these from the repo root after the real processed/runtime artifacts exist:
-
-REDUCED blend search:
-
-```bash
-python -c "from src.models.reduced_blend import run_reduced_blend_experiment; run_reduced_blend_experiment()"
-```
-
-REDUCED calibrated comparison:
-
-```bash
-python -c "from src.models.reduced_blend_calibrated_compare import run_reduced_blend_calibrated_compare; run_reduced_blend_calibrated_compare()"
-```
-
-REDUCED policy-threshold diagnostic:
-
-```bash
-python -c "from src.models.reduced_policy_threshold_diag import run_reduced_policy_threshold_diag; run_reduced_policy_threshold_diag()"
-```
-
-REDUCED previous-vs-merged retraining comparison:
-
-```bash
-python -c "from src.models.reduced_training_regime_compare import run_reduced_training_regime_comparison; run_reduced_training_regime_comparison()"
-```
-
-FULL subgroup calibration experiments:
-
-```bash
-python -c "from src.models.subgroup_calibration import run_subgroup_calibration_experiments; run_subgroup_calibration_experiments()"
-```
-
-FULL fairness-aware retraining experiments:
-
-```bash
-python -c "from src.models.fairness_aware_training import run_fairness_aware_modeling_experiments; run_fairness_aware_modeling_experiments()"
-```
-
-The reports written by those commands remain offline-only and should not be treated as runtime defaults.
-
-## Test Commands
-
-Focused regression checks:
+## Focused Regression Checks
 
 ```bash
 python -m pytest tests/test_api.py
-python -m pytest tests/test_m3_blending.py
-python -m pytest tests/test_reduced_blend_calibrated_compare.py
-python -m pytest tests/test_reduced_policy_threshold_diag.py
+python -m pytest tests/test_backend_freeze_contract.py
+python -m pytest tests/test_module1_split_regime.py
 ```
 
 ## Key Documentation
 
+- `Documentation/backend_api_contract.md`
+- `Documentation/backend_freeze_summary.md`
 - `Documentation/artifact_contract.md`
-- `Documentation/final_branch_summary.md`
 - `Documentation/offline_experiment_index.md`
 - `howToRun.md`
-
-## Truthful Final Position
-
-- Active runtime REDUCED remains XGBoost.
-- REDUCED LightGBM and REDUCED weighted blend remain offline candidates only.
-- Blend is the strongest directional ranking candidate offline.
-- Calibrated candidates are too close for a clear runtime winner.
-- Policy usefulness is threshold-dependent.
-- No REDUCED candidate is dominant enough for runtime promotion on this branch.

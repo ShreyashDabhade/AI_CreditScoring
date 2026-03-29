@@ -3,6 +3,9 @@ Documentation/
 !Documentation/
 Documentation/*
 !Documentation/artifact_contract.md
+!Documentation/backend_api_contract.md
+!Documentation/backend_freeze_summary.md
+!Documentation/offline_experiment_index.md
 
 # Python
 __pycache__/
